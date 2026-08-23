@@ -170,7 +170,9 @@ class SyncResultDialog(QDialog):
             layout.addWidget(QLabel("没有失败或跳过的项。"))
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         _localize_dialog_buttons(buttons)
+        # Close 按钮的角色是 RejectRole，会触发 rejected 信号，因此两个信号都关闭对话框。
         buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.accept)
         layout.addWidget(buttons)
 
     def _select_all_detail(self) -> None:
