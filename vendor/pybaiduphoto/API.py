@@ -1,0 +1,334 @@
+from __future__ import annotations
+import os
+import logging
+
+
+from .Requests import Requests
+from .OnlineItem import OnlineItem
+from .Album import Album
+from .General import General
+
+# from .General import getAllItemsBySinglePageFunction
+from .Person import PersonAlbum
+from .Location import Location
+from .Thing import Thing
+
+
+
+
+class ImportFromNDisk():
+
+    def __init__(self,req: Requests):
+        self.req = req 
+
+    def listPath(self,path:str):
+        url = "https://photo.baidu.com/youai/import/v1/ndpathlist"
+        params = {"path":path}
+        res = self.req.getReqJson(url=url,params=params)
+        if res['errno'] == 0:
+            return res['list']
+        else:
+            logging.error(str(res))
+            raise Exception("error @listPath")
+        
+    def importDirByfsid(self,fsid):
+        url = "https://photo.baidu.com/youai/import/v1/create"
+        params = { 
+            "type":2 ,
+            "time_range":10, 
+            "category":13,
+            "fsid_list":f"[{fsid}]"
+         }
+        res = self.req.getReqJson(url=url,params=params)
+        return res 
+
+    def recurciveImportDir(self,dirPath:str):
+        segs = [seg for seg in dirPath.split("/") if len(seg)>0 ]
+        if len(segs) == 0:
+            logging.error(f"illegal format of dirPath={dirPath}")
+            raise Exception("error @recurciveImportDir")
+        fatherDir="/"+"/".join(segs[:-1])
+        listdir = self.listPath(path=fatherDir)
+        fs_id = None
+        for item in listdir:
+            if item['path'] == dirPath:
+                fs_id = item['fs_id'] 
+                isdir = item['isdir']
+                break 
+        if fs_id is None:
+            raise Exception(f"cannot find dirPath = {dirPath} error @recurciveImportDir")
+        if isdir !=1 :
+            raise Exception(f"only support importing directory. error @recurciveImportDir")
+        return self.importDirByfsid(fsid=fs_id)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class API:
+    def __init__(self, cookies, proxies={}):
+        self.req = Requests(cookies=cookies, proxies=proxies)
+        self.g = General(self.req)
+
+    @staticmethod
+    def getObjectClass(name):
+        table = {
+            "Item": OnlineItem,
+            "Album": Album,
+            "Person": PersonAlbum,
+            "Location": Location,
+            "Thing": Thing,
+        }
+        if name not in table:
+            logging.error("not registrat class by name = [{}]".format(name))
+        else:
+            return table[name]
+
+    def get_self_1page(self, typeName, cursor=None) -> dict:
+        cls = self.getObjectClass(typeName)
+        return cls.get_self_1page(req=self.req, cursor=cursor)
+
+    def get_SinglePage(self, cursor=None) -> dict:
+        logging.warning("Deprecated method!!! use get_self_1page instead!")
+        return self.get_self_1page(typeName="Item", cursor=cursor)
+
+    def get_self_All(self, typeName, max=-1) -> list:
+        cls = self.getObjectClass(typeName)
+        if cls is None:
+            return None
+        else:
+            return cls.get_self_All(req=self.req, max=max)
+
+    def getAllItems(self, max=-1) -> list:
+        logging.warning("Deprecated method!!! use getAllTargetList instead!")
+        return self.getAllTargetList(typeName="Item", max=max)
+
+    def getAlbumList(self, limit=30, cursor=None):
+        url = "https://photo.baidu.com/youai/album/v1/list"
+        params = dict(
+            (
+                ("clienttype", "70"),
+                # ('bdstoken', '263...'),
+                ("limit", limit),
+                ("need_amount", "1"),
+                ("need_member", "1"),
+                ("field", "mtime"),
+            )
+        )
+        if cursor is not None:
+            params["cursor"] = cursor
+        pageInfo = self.req.getReqJson(url, params=params)
+        if pageInfo["list"] is None:
+            return {"items": [], "has_more": False, "cursor": None}
+        return {
+            "items": [Album(i, self.req) for i in pageInfo["list"]],
+            "has_more": pageInfo["has_more"] == 1,
+            "cursor": pageInfo["cursor"],
+        }
+
+    def getAlbumList_All(self, max=-1):
+        r = []
+        cursor = None
+        c = 0
+        while True:
+            albs = self.getAlbumList(cursor=cursor)
+            r += albs["items"]
+            if albs["has_more"]:
+                cursor = albs["cursor"]
+            else:
+                return r
+
+    def upload_1file_directly(self, filePath):
+        preC, reqJson1, reqJson2 = self.g.upload_1file(filePath)
+        logging.debug(
+            "upload file: preC=\n{}\n,reqJson1=\n{}\n, reqJson2=\n{}\n ".format(
+                preC, reqJson1, reqJson2
+            )
+        )
+        return_type = preC.get("return_type") if isinstance(preC, dict) else None
+        if return_type is None:
+            # A precreate reply without return_type is an abnormal (often
+            # network-related) response.  Log the full payload so the actual
+            # errno/request_id is visible in error.log instead of a bare KeyError.
+            errno = preC.get("errno") if isinstance(preC, dict) else None
+            errmsg = preC.get("errmsg") if isinstance(preC, dict) else None
+            request_id = preC.get("request_id") if isinstance(preC, dict) else None
+            logging.error(
+                "precreate 响应缺少 return_type，errno=[{}]，errmsg=[{}]，request_id=[{}]，完整响应=[{}]".format(
+                    errno,
+                    errmsg,
+                    request_id,
+                    str(preC)[:4000],
+                )
+            )
+            if str(errno) == "50801":
+                raise ValueError("文件过大或需要开通会员（errno=50801）")
+            if str(errno) == "50000":
+                raise ValueError("请求过于频繁，请稍后重试（errno=50000）")
+            if str(errno) == "2":
+                raise ValueError("文件超过普通用户大小上限（errno=2，照片与视频均 30MB），请开通超级会员或压缩后再试")
+            msg = "precreate 响应缺少 return_type"
+            if errno is not None:
+                msg += "：errno={}".format(errno)
+            if errmsg:
+                msg += "，errmsg: \"{}\"".format(errmsg)
+            raise ValueError(msg)
+        if return_type == 1:  # new upload
+            # The create step reply must carry the uploaded item under "data".
+            # When it does not, the response is usually an errno envelope
+            # (rate limit / oversize) rather than a missing field, so log the
+            # full packet and surface the errno instead of a bare KeyError.
+            if not isinstance(reqJson2, dict) or "data" not in reqJson2:
+                errno = reqJson2.get("errno") if isinstance(reqJson2, dict) else None
+                errmsg = reqJson2.get("errmsg") if isinstance(reqJson2, dict) else None
+                logging.error(
+                    "upload create 响应缺少 data，return_type=[1]，errno=[{}]，errmsg=[{}]，完整响应=[{}]".format(
+                        errno, errmsg, str(reqJson2)[:4000]
+                    )
+                )
+                if str(errno) == "50801":
+                    raise ValueError("文件过大或需要开通会员（errno=50801）")
+                if str(errno) == "50000":
+                    raise ValueError("请求过于频繁，请稍后重试（errno=50000）")
+                if str(errno) == "2":
+                    raise ValueError("文件超过普通用户大小上限（errno=2，照片与视频均 30MB），请开通超级会员或压缩后再试")
+                msg = "upload create 响应缺少 data"
+                if errno is not None:
+                    msg += "：errno={}".format(errno)
+                if errmsg:
+                    msg += "，errmsg: \"{}\"".format(errmsg)
+                raise ValueError(msg)
+            info = reqJson2["data"]
+            if "fsid" not in info:
+                info["fsid"] = info["fs_id"]
+            return OnlineItem(info, self.req)
+        elif return_type == 3:  # already exist
+            logging.warning("upload item already exist on remote")
+            if not isinstance(preC, dict) or "data" not in preC:
+                errno = preC.get("errno") if isinstance(preC, dict) else None
+                errmsg = preC.get("errmsg") if isinstance(preC, dict) else None
+                logging.error(
+                    "upload precreate 响应缺少 data（return_type=3），errno=[{}]，errmsg=[{}]，完整响应=[{}]".format(
+                        errno, errmsg, str(preC)[:4000]
+                    )
+                )
+                if str(errno) == "50801":
+                    raise ValueError("文件过大或需要开通会员（errno=50801）")
+                if str(errno) == "50000":
+                    raise ValueError("请求过于频繁，请稍后重试（errno=50000）")
+                msg = "文件已存在但响应缺少 data"
+                if errno is not None:
+                    msg += "：errno={}".format(errno)
+                if errmsg:
+                    msg += "，errmsg: \"{}\"".format(errmsg)
+                raise ValueError(msg)
+            return self.getOnlineItem_ByInfo(info=preC["data"])
+        else:
+            logging.error(
+                "unknow return_type ={} @upload_1file_directly".format(return_type)
+            )
+            logging.error("full response = [{}]".format(str(preC)))
+            return
+
+    def upload_1file(self, filePath, album=None):
+        # consider upload into alumb
+        item = self.upload_1file_directly(filePath=filePath)
+        if album is not None and item is not None:
+            logging.debug(
+                "append item into album. item=[{}],album=[{}]".format(
+                    item.info, album.info
+                )
+            )
+            album.append(item)
+        return item
+
+    def createNewAlbum(self, Name, tid=None):
+        res = self.g.createNewAlbum(Name, tid)
+        return Album(res["info"], req=self.req)
+
+    def get_batchDownloadLink(self, items, zipname=None):
+        return self.g.getdlLink_batchDonwload(items=items, zipname=zipname)
+
+    def getOnlineItem_ByInfo(self, info):
+        return OnlineItem(info=info, req=self.req)
+
+    def getAlbum_ByInfo(self, info):
+        return Album(info=info, req=self.req)
+
+    def getPerson_ByInfo(self, info):
+        return PersonAlbum(info=info, req=self.req)
+
+    def getAlbum_ByID(self, ID):
+        params = {
+            "album_id": str(ID),
+        }
+        data = self.req.getReqJson(
+            url="https://photo.baidu.com/youai/album/v1/detail",
+            params=params,
+        )
+        if data["errno"] == 0:
+            return self.getAlbum_ByInfo(info=data)
+        else:
+            logging.error("return error in getAlbum_ByID")
+
+    def getPersonList_Onepage(self):
+        # Currently, keep it as internal function. Since when numo of person increase, cursor may be used.
+        url = "https://photo.baidu.com/youai/iclass/person/v2/list"
+        params = {
+            "ishidden": "0",
+            "isrelation": "0",
+        }
+        res = self.req.getReqJson(url=url, params=params)
+        PersonList = [PersonAlbum(info=info, req=self.req) for info in res["list"]]
+        return PersonList
+
+    def getAllPersonList(self, max=-1):
+        return self.getPersonList_Onepage()
+
+    def loadSelfByInfo(self, typeName, info):
+        cls = self.getObjectClass(typeName)
+        return cls.loadSelfByInfo(info=info, req=self.req)
+
+    def albumSearch(self, keyword, limit=30, start=0):
+        R = {}
+        params = {
+            "clienttype": "70",
+            "keyword": keyword,
+            "limit": limit,
+            "start": start,
+        }
+        req = self.g.req
+        res = req.getReqJson(
+            url="https://photo.baidu.com/youai/album/v1/search",
+            params=params,
+        )
+        abList = []
+        for info in res["list"]:
+            abList.append(self.getAlbum_ByInfo(info=info))
+        R["items"] = abList
+        R["has_more"] = res["has_more"] == 1
+        return R
+    
+
+    def importFromPanDisk(self,dirPath:str):
+        """import items from baidu-Pandisk
+
+        Args:
+            dirPath (str): the path in Pandisk. example: dirPath="/我的资源"
+        """   
+        return ImportFromNDisk(req=self.req).recurciveImportDir(dirPath=dirPath)
+     
+
