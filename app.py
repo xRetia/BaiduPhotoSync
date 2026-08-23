@@ -275,7 +275,7 @@ class MainWindow(QMainWindow):
             height = min(self.height(), max(520, available.height() - 8))
             self.resize(width, height)
         self.setMinimumSize(880, 520)
-        self.settings = QSettings("Manus", "YikeSyncGUI")
+        self.settings = QSettings("Baidu", "BaiduPhotoSync")
         self.session_store = SessionStore(self.settings)
         self.ignored_album_names = self._load_ignored_albums()
         self.client: YikeRemoteClient | None = None
@@ -1890,8 +1890,8 @@ def main() -> int:
     ui_font.setStyleStrategy(QFont.PreferAntialias)
     ui_font.setHintingPreference(QFont.PreferFullHinting)
     app.setFont(ui_font)
-    app.setApplicationName(APP_NAME)
-    app.setOrganizationName("Manus")
+    app.setApplicationName("BaiduPhotoSync")
+    app.setOrganizationName("Baidu")
     icon = QIcon(str(APP_ICON_PATH))
     if not icon.isNull():
         app.setWindowIcon(icon)
