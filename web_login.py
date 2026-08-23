@@ -232,7 +232,6 @@ class WebLoginDialog(_BaiduCookieDialog):
 
     def _after_cookie_change(self) -> None:
         available = {key[0] for key in self._cookies}
-        LOGGER.debug("cookie 变化，当前百度域可用: %s", sorted(available))
         if self._verification_active or not self._has_cookie_names(REQUIRED_LOGIN_COOKIES):
             return
         if "BDUSS" in available and self._bduss_seen_at == 0.0:

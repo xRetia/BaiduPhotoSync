@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._set_debug_logging(self.debug_checkbox.isChecked())
         self._set_connected(False)
+        QTimer.singleShot(0, self._check_ffmpeg_at_startup)
         QTimer.singleShot(0, self._restore_or_prompt_login)
 
     # ----- UI layout -------------------------------------------------
@@ -476,8 +477,6 @@ class MainWindow(QMainWindow):
         self.advanced_dialog = dialog
         self._load_advanced_settings()
         self.compress_video_checkbox.toggled.connect(self._on_compress_video_toggled)
-        if self.compress_video_checkbox.isChecked():
-            QTimer.singleShot(0, lambda: self._on_compress_video_toggled(True))
 
     def open_advanced_settings(self) -> None:
         self.advanced_dialog.exec()
@@ -928,6 +927,33 @@ class MainWindow(QMainWindow):
             self.sync_live_label.setText("同步未运行")
         else:
             self.sync_live_label.setText("同步待命")
+
+    def _check_ffmpeg_at_startup(self) -> None:
+        """At launch, if video compression is enabled but FFmpeg is missing, ask
+        the user to download it; declining turns compression off instead of
+        silently starting a download or leaving it unchecked-but-configured."""
+        if not self.compress_video_checkbox.isChecked():
+            return
+        try:
+            locate_ffmpeg()
+            return
+        except VideoCompressionError:
+            pass
+        answer = QMessageBox.question(
+            self,
+            "缺少视频压缩组件",
+            "已勾选“压缩视频到30M以内”，但未检测到 FFmpeg。是否现在下载并校验该组件？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._on_compress_video_toggled(True)
+            return
+        self.compress_video_checkbox.blockSignals(True)
+        self.compress_video_checkbox.setChecked(False)
+        self.compress_video_checkbox.blockSignals(False)
+        self.settings.setValue("compress_oversize_videos", False)
+        self.status.showMessage("未下载视频压缩组件，已关闭视频压缩。", 6000)
 
     def _restore_or_prompt_login(self) -> None:
         """Validate the saved session first; show Baidu QR only when needed."""
