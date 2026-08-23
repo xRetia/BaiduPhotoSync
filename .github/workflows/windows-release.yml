@@ -1,0 +1,87 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish Windows x64 executables
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "push") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $version = "${{ inputs.version }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "A release version is required."
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build standard executable
+        shell: pwsh
+        run: scripts\build-windows-release.ps1 -Version "${{ steps.version.outputs.value }}"
+
+      - name: Preserve standard executable
+        shell: pwsh
+        run: Copy-Item release\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe $env:RUNNER_TEMP\
+
+      - name: Build executable with FFmpeg
+        shell: pwsh
+        run: scripts\build-windows-release.ps1 -WithFFmpeg -Version "${{ steps.version.outputs.value }}"
+
+      - name: Assemble release artifacts
+        shell: pwsh
+        run: |
+          Copy-Item $env:RUNNER_TEMP\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe release\
+          Get-FileHash release\*.exe -Algorithm SHA256 | Format-Table -AutoSize
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        shell: pwsh
+        run: |
+          $tag = "v${{ steps.version.outputs.value }}"
+          $title = "Baidu Photo Sync $tag"
+          $notes = @"
+          ## Windows x64 executables
+
+          | Asset | Description |
+          | --- | --- |
+          | `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe` | Standard executable. It downloads and verifies FFmpeg only when video compression is enabled. |
+          | `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64-with-ffmpeg.exe` | Executable with FFmpeg and FFprobe bundled for immediate offline video-compression use. |
+
+          Run the executable, complete QR-code sign-in, build a sync plan, and review it before execution.
+          "@
+          gh release create $tag release\*.exe --repo "${{ github.repository }}" --title $title --notes $notes --verify-tag

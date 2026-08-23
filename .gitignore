@@ -7,14 +7,16 @@ __pycache__/
 venv/
 env/
 
-# PyInstaller 构建产物
+# PyInstaller build output
 build/
 dist/
+.release-build/
+release/
 
-# 运行时日志
+# Runtime logs
 *.log
 
-# 编辑器/系统
+# Editor and operating-system files
 *.swp
 .DS_Store
 .vscode/
