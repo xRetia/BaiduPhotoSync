@@ -52,12 +52,16 @@ if ($WithFFmpeg) {
     Write-Host "Downloading and verifying bundled FFmpeg tools..."
     Invoke-WebRequest "$FfmpegBaseUrl/$FfmpegArchiveName" -OutFile $FfmpegArchive
     $checksums = (Invoke-WebRequest "$FfmpegBaseUrl/checksums.sha256").Content
-    $pattern = "(?m)^([a-fA-F0-9]{64})[ \t]+\*?$([regex]::Escape($FfmpegArchiveName))\r?$"
-    $match = [regex]::Match($checksums, $pattern)
-    if (-not $match.Success) {
+    $checksumLine = $checksums -split "`r?`n" |
+        Where-Object { $_.TrimEnd().EndsWith($FfmpegArchiveName) } |
+        Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($checksumLine)) {
         throw "The expected FFmpeg checksum was not present in checksums.sha256."
     }
-    $expectedHash = $match.Groups[1].Value.ToLowerInvariant()
+    $expectedHash = ($checksumLine -split "\s+")[0].Trim().ToLowerInvariant()
+    if ($expectedHash -notmatch "^[a-f0-9]{64}$") {
+        throw "The FFmpeg checksum entry was malformed."
+    }
     $actualHash = (Get-FileHash $FfmpegArchive -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $expectedHash) {
         throw "FFmpeg checksum verification failed."
