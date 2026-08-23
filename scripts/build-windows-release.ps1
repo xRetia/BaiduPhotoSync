@@ -52,7 +52,7 @@ if ($WithFFmpeg) {
     Write-Host "Downloading and verifying bundled FFmpeg tools..."
     Invoke-WebRequest "$FfmpegBaseUrl/$FfmpegArchiveName" -OutFile $FfmpegArchive
     $checksums = (Invoke-WebRequest "$FfmpegBaseUrl/checksums.sha256").Content
-    $pattern = "(?m)^([a-fA-F0-9]{64})\s+\*?$([regex]::Escape($FfmpegArchiveName))$"
+    $pattern = "(?m)^([a-fA-F0-9]{64})[ \t]+\*?$([regex]::Escape($FfmpegArchiveName))\r?$"
     $match = [regex]::Match($checksums, $pattern)
     if (-not $match.Success) {
         throw "The expected FFmpeg checksum was not present in checksums.sha256."
