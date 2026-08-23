@@ -35,7 +35,7 @@ def download_directory() -> Path:
     """Return a per-user writable location; never write into Program Files."""
     appdata = os.environ.get("APPDATA")
     base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "YikeSync" / "ffmpeg"
+    return base / "BaiduPhotoSync" / "ffmpeg"
 
 
 def _emit(progress: ProgressCallback | None, value: int, text: str) -> None:

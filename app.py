@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import os
+import shutil
 import sys
 import time
 import traceback
@@ -463,6 +465,11 @@ class MainWindow(QMainWindow):
         ignored_hint.setWordWrap(True)
         ignored_hint.setObjectName("muted")
         advanced_layout.addWidget(ignored_hint)
+        reset_button = QPushButton("重置应用（清除本机全部数据）")
+        reset_button.setObjectName("dangerButton")
+        reset_button.setToolTip("删除注册表设置与登录会话、AppData 缓存与 FFmpeg、程序目录 error.log，然后退出。")
+        reset_button.clicked.connect(self._reset_application)
+        advanced_layout.addWidget(reset_button)
         advanced_layout.addStretch(1)
         pages.addWidget(advanced_page)
 
@@ -508,6 +515,51 @@ class MainWindow(QMainWindow):
         self.settings.setValue("skip_oversize", self.size_limit_checkbox.isChecked())
         self.settings.setValue("compress_oversize_videos", self.compress_video_checkbox.isChecked())
         self.settings.setValue("file_compare_mode", self.compare_mode_combo.currentData())
+
+    def _reset_application(self) -> None:
+        answer = QMessageBox.warning(
+            self,
+            "重置应用",
+            "此操作将删除本程序在本机留下的全部本地数据，且无法撤销：\n"
+            "• Windows 注册表中的设置与登录会话\n"
+            "• AppData 下的全部缓存与 FFmpeg（BaiduPhotoSync）\n"
+            "• 程序目录下的 error.log\n\n"
+            "完成后需要重新扫码登录，正在进行的同步会被中断。确定继续吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        # 1) 注册表：清空并删除应用键
+        self.settings.clear()
+        self.settings.sync()
+        try:
+            import winreg
+
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Baidu", 0, winreg.KEY_ALL_ACCESS)
+            winreg.DeleteKey(key, "BaiduPhotoSync")
+            winreg.CloseKey(key)
+        except OSError:
+            pass
+        # 2) AppData：新的 BaiduPhotoSync 与历史遗留的 YikeSync
+        try:
+            from ffmpeg_downloader import download_directory
+
+            appdata = download_directory().parent.parent
+            for name in ("BaiduPhotoSync", "YikeSync"):
+                target = appdata / name
+                if target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("重置时清理 AppData 失败：%s", exc)
+        # 3) 程序目录下的 error.log
+        try:
+            if ERROR_LOG_PATH.exists():
+                ERROR_LOG_PATH.unlink()
+        except OSError as exc:
+            LOGGER.warning("重置时清理 error.log 失败：%s", exc)
+        QMessageBox.information(self, "重置完成", "本机数据已清除，应用即将退出，请重新启动程序。")
+        QApplication.instance().quit()
 
     def _on_compress_video_toggled(self, checked: bool) -> None:
         if not checked:
@@ -803,6 +855,9 @@ class MainWindow(QMainWindow):
             #advancedNavigation::item { padding: 9px 8px; border-radius: 7px; margin: 2px 0; }
             #advancedNavigation::item:selected { background: #e2efff; color: #175fb5; font-weight: 700; }
             #advancedNavigation::item:hover { background: #edf4ff; }
+            #dangerButton { background: #fff1f2; border: 1px solid #fb7185; color: #b4232a; font-weight: 700; padding: 8px 12px; }
+            #dangerButton:hover { background: #fecdd3; }
+            #dangerButton:pressed { background: #fda4af; }
             #loginLoadingOverlay { background: #ffffff; border: none; }
             #loginLoadingTitle { color: #14213d; font-size: 19px; font-weight: 700; }
             #loginLoadingHint { color: #5b677a; font-size: 11pt; }

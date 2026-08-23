@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -92,6 +93,10 @@ def _find_tool(name: str) -> Path:
         candidates.append(download_directory() / executable)
     except ImportError:
         pass
+    # 兼容旧版本留下的 AppData/YikeSync/ffmpeg 路径。
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "YikeSync" / "ffmpeg" / executable)
     for candidate in candidates:
         if candidate.is_file():
             return candidate
