@@ -12,7 +12,7 @@ A desktop application for synchronizing local photo folders with Baidu Photo alb
 | Sync planner | Map local folders to cloud albums, compare content, produce an explicit plan, and control execution with pause, resume, and stop actions. |
 | Safe defaults | Keep destructive synchronization disabled by default and surface file conflicts before any transfer begins. |
 | Video handling | Optionally create a temporary upload copy for oversize video files while keeping the local original unchanged. |
-| Account session | Use an in-app Baidu QR-code sign-in page and keep the validated local session scoped to the current Windows user. |
+| Account session | Use an in-app Baidu QR-code sign-in page, keep the validated session scoped to the current Windows user, and refresh the active web session in a hidden view every minute while the app is open. |
 | Windows release | Use the standard executable; it downloads and validates FFmpeg only when video compression is enabled. |
 
 ## Download and Use
@@ -61,7 +61,7 @@ Video compression is optional and disabled by default. When enabled, the applica
 
 ## Privacy and Data Handling
 
-The QR-code flow is displayed in the application rather than requiring a separate browser. A validated local sign-in session is kept for the current Windows user, and the project does not intend to write cookies to application logs. Treat any local session as sensitive and use the application only on a trusted Windows account.
+The QR-code flow is displayed in the application rather than requiring a separate browser. A validated local sign-in session is kept for the current Windows user, and the project does not intend to write cookies to application logs. While the application is open, a hidden private WebView reloads the Baidu Photo homepage once per minute and saves a rotated complete session back to the encrypted local store. It stops on re-login, verified sign-out, application reset, and normal shutdown. Treat any local session as sensitive and use the application only on a trusted Windows account.
 
 ## Build from Source
 

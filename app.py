@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
 
 from remote_client import RemoteAlbum, RemoteClientError, RemoteMedia, UnsupportedRemoteFeature, YikeRemoteClient
 from session_store import SessionStore, SessionStoreError
-from web_login import WEBENGINE_AVAILABLE, WebLoginDialog, WebLogoutDialog
+from web_login import WEBENGINE_AVAILABLE, SessionKeepAlive, WebLoginDialog, WebLogoutDialog
 from sync_engine import FileCompareMode, PlanAction, SortField, SyncAction, SyncControl, SyncDirection, SyncEngine
 from video_compression import VideoCompressionError, VideoCompressionOptions, locate_ffmpeg, prepared_video_upload
 from ffmpeg_downloader import FFmpegDownloadError, ensure_windows_ffmpeg
@@ -283,6 +283,9 @@ class MainWindow(QMainWindow):
         self.session_store = SessionStore(self.settings)
         self.ignored_album_names = self._load_ignored_albums()
         self.client: YikeRemoteClient | None = None
+        self.session_keepalive = SessionKeepAlive(self)
+        self.session_keepalive.cookie_refreshed.connect(self._apply_keepalive_cookie)
+        self.session_keepalive.refresh_failed.connect(self._keepalive_refresh_failed)
         self._login_dialog: WebLoginDialog | None = None
         self._qr_candidate_cookie = ""
         self._qr_login_attempts = 0
@@ -533,6 +536,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        self.session_keepalive.stop()
         # 1) 注册表：清空并删除应用键
         self.settings.clear()
         self.settings.sync()
@@ -1047,6 +1051,9 @@ class MainWindow(QMainWindow):
         self._open_qr_login()
 
     def _open_qr_login(self) -> None:
+        # A fresh QR flow owns the browser session; do not keep an older hidden
+        # profile alive while the user is signing in again.
+        self.session_keepalive.stop()
         if not WEBENGINE_AVAILABLE:
             QMessageBox.critical(
                 self,
@@ -1117,6 +1124,7 @@ class MainWindow(QMainWindow):
         return client
 
     def _login_failed(self, _error: str) -> None:
+        self.session_keepalive.stop()
         self.session_store.clear()
         self._pending_cookie_text = ""
         self._save_session_after_connect = False
@@ -1153,6 +1161,7 @@ class MainWindow(QMainWindow):
 
     def _connected(self, client: object) -> None:
         self.client = client  # type: ignore[assignment]
+        validated_cookie_text = self._pending_cookie_text
         saved = False
         if self._pending_cookie_text and self._save_session_after_connect:
             try:
@@ -1168,7 +1177,31 @@ class MainWindow(QMainWindow):
         self._pending_cookie_text = ""
         self._save_session_after_connect = False
         self._set_connected(True)
+        # Keep the authenticated website session alive only while this desktop
+        # application is running. The private profile is destroyed on logout,
+        # reset, and normal application shutdown.
+        self.session_keepalive.start(validated_cookie_text)
         self.refresh_albums()
+
+    def _apply_keepalive_cookie(self, cookie_text: str) -> None:
+        """Persist a rotated browser session without treating refresh errors as logout."""
+        if self.client is None:
+            return
+        try:
+            refreshed_client = YikeRemoteClient(cookie_text)
+            self.session_store.save(cookie_text)
+        except (RemoteClientError, SessionStoreError) as exc:
+            LOGGER.warning("会话保活未保存刷新后的 Cookie：%s", exc)
+            return
+        # Do not replace an API client while any worker might still reference it.
+        if self._sync_mode == "idle" and not any(thread.isRunning() for thread in self._running_threads):
+            self.client = refreshed_client
+        LOGGER.debug("隐藏 WebView 已刷新并保存当前登录会话。")
+
+    def _keepalive_refresh_failed(self, reason: str) -> None:
+        # A failed background webpage refresh can be caused by a short network
+        # interruption. Keep the encrypted session instead of clearing it.
+        LOGGER.warning("隐藏 WebView 会话保活未完成：%s", reason)
 
     def _show_account_menu(self) -> None:
         menu = QMenu(self)
@@ -1184,6 +1217,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _clear_connected_account(self) -> None:
+        self.session_keepalive.stop()
         self.session_store.clear()
         self.client = None
         self._pending_cookie_text = ""
@@ -1201,11 +1235,17 @@ class MainWindow(QMainWindow):
     def _logout_via_web(self) -> None:
         if not self._can_logout() or self.client is None:
             return
-        dialog = WebLogoutDialog(self.client.export_cookie_json(), self)
+        current_cookie_text = self.client.export_cookie_json()
+        # Prevent the private keepalive view from renewing the same session while
+        # the user is actively completing the official logout flow.
+        self.session_keepalive.stop()
+        dialog = WebLogoutDialog(current_cookie_text, self)
         if dialog.exec() != QDialog.Accepted:
+            self.session_keepalive.start(current_cookie_text)
             self.status.showMessage("未检测到网页退出完成，本机登录会话仍保留。", 6000)
             return
         if not dialog.logout_verified():
+            self.session_keepalive.start(current_cookie_text)
             self.status.showMessage("网页退出状态无法确认，本机登录会话仍保留。", 6000)
             return
         self._clear_connected_account()
@@ -1955,6 +1995,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 self.status.showMessage("正在等待当前网络请求安全结束，请稍后再次关闭窗口。", 8000)
                 return
+        self.session_keepalive.stop()
         self.client = None  # Drop the in-memory Cookie reference.
         self._pending_cookie_text = ""
         super().closeEvent(event)

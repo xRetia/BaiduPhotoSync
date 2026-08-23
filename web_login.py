@@ -10,7 +10,7 @@ import json
 import logging
 import time
 
-from PySide6.QtCore import QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtNetwork import QNetworkCookie
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
@@ -37,6 +37,7 @@ REQUIRED_LOGIN_COOKIES = {"BAIDUID", "BDUSS"}
 # BDUSS that the QR page sets the moment a code is scanned.
 CONFIRMED_LOGIN_COOKIES = {"STOKEN", "PTOKEN", "PANWEB", "PANWEB.sig"}
 AUTHENTICATION_COOKIE = "BDUSS"
+SESSION_KEEPALIVE_INTERVAL_MS = 60_000
 
 
 def _cookie_text(cookie: QNetworkCookie) -> tuple[str, str]:
@@ -121,6 +122,141 @@ class _BaiduCookieDialog(QDialog):
             name, value = _cookie_text(cookie)
             records.append({"name": name, "value": value, "domain": cookie.domain() or ".baidu.com"})
         return json.dumps(records, ensure_ascii=False)
+
+
+class SessionKeepAlive(QObject):
+    """Keep a validated Baidu web session active while the desktop app is open.
+
+    The WebEngine profile is deliberately off the record. Cookies therefore stay
+    in memory inside the hidden view and are copied back to the encrypted local
+    session store only when the web page returns a complete authenticated set.
+    """
+
+    cookie_refreshed = Signal(str)
+    refresh_failed = Signal(str)
+
+    def __init__(self, host: QWidget):
+        super().__init__(host)
+        self._host = host
+        self._profile = None
+        self._view = None
+        self._cookies: dict[tuple[str, str, str], QNetworkCookie] = {}
+        self._timer = QTimer(self)
+        self._timer.setInterval(SESSION_KEEPALIVE_INTERVAL_MS)
+        self._timer.timeout.connect(self.refresh_now)
+        self._active = False
+        self._refresh_in_flight = False
+        self._last_emitted_cookie_text = ""
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def start(self, cookie_text: str) -> None:
+        """Seed a fresh private profile and begin minute-level homepage refreshes."""
+        self.stop()
+        if not WEBENGINE_AVAILABLE or not cookie_text.strip():
+            return
+        self._active = True
+        self._create_view()
+        self._seed_cookies(cookie_text)
+        self._timer.start()
+        # Cookie insertion into QWebEngineCookieStore is asynchronous.
+        QTimer.singleShot(700, self.refresh_now)
+
+    def stop(self) -> None:
+        """Stop refreshes and destroy the private profile with its in-memory cookies."""
+        self._active = False
+        self._refresh_in_flight = False
+        self._timer.stop()
+        self._cookies.clear()
+        self._last_emitted_cookie_text = ""
+        if self._view is not None:
+            self._view.stop()
+            self._view.deleteLater()
+            self._view = None
+        if self._profile is not None:
+            self._profile.deleteLater()
+            self._profile = None
+
+    def refresh_now(self) -> None:
+        if not self._active or self._view is None or self._refresh_in_flight:
+            return
+        self._refresh_in_flight = True
+        self._view.setUrl(HOME_URL)
+
+    def _create_view(self) -> None:
+        assert QWebEngineProfile is not None and QWebEngineView is not None
+        self._profile = QWebEngineProfile(self)  # no storage name: off the record
+        store = self._profile.cookieStore()
+        store.cookieAdded.connect(self._cookie_added)
+        store.cookieRemoved.connect(self._cookie_removed)
+        self._view = QWebEngineView(self._profile, self._host)
+        self._view.resize(1, 1)
+        self._view.hide()
+        self._view.loadFinished.connect(self._load_finished)
+
+    def _seed_cookies(self, cookie_text: str) -> None:
+        if self._profile is None:
+            return
+        try:
+            records = json.loads(cookie_text)
+        except json.JSONDecodeError:
+            records = []
+        if not isinstance(records, list):
+            return
+        store = self._profile.cookieStore()
+        for item in records:
+            if not isinstance(item, dict) or not item.get("name") or not item.get("value"):
+                continue
+            domain = str(item.get("domain", ".baidu.com"))
+            if not _is_baidu_domain_name(domain):
+                continue
+            cookie = QNetworkCookie(str(item["name"]).encode("utf-8"), str(item["value"]).encode("utf-8"))
+            cookie.setDomain(domain if domain.startswith(".") else "." + domain)
+            cookie.setPath("/")
+            store.setCookie(cookie, HOME_URL)
+
+    def _cookie_added(self, cookie: QNetworkCookie) -> None:
+        if not _is_baidu_domain(cookie):
+            return
+        name, _ = _cookie_text(cookie)
+        self._cookies[(name, cookie.domain(), cookie.path())] = cookie
+
+    def _cookie_removed(self, cookie: QNetworkCookie) -> None:
+        name, _ = _cookie_text(cookie)
+        self._cookies.pop((name, cookie.domain(), cookie.path()), None)
+
+    def _load_finished(self, ok: bool) -> None:
+        self._refresh_in_flight = False
+        if not self._active:
+            return
+        if not ok:
+            self.refresh_failed.emit("hidden WebView could not load the Baidu Photo homepage")
+            return
+        # Allow Set-Cookie response headers and JavaScript redirects to settle.
+        QTimer.singleShot(900, self._publish_refreshed_cookie)
+
+    def _publish_refreshed_cookie(self) -> None:
+        if not self._active:
+            return
+        available = {key[0] for key in self._cookies}
+        if not REQUIRED_LOGIN_COOKIES.issubset(available):
+            self.refresh_failed.emit("hidden WebView did not retain a complete authenticated cookie set")
+            return
+        records = []
+        for cookie in self._cookies.values():
+            name, value = _cookie_text(cookie)
+            records.append({"name": name, "value": value, "domain": cookie.domain() or ".baidu.com"})
+        cookie_text = json.dumps(records, ensure_ascii=False, sort_keys=True)
+        if cookie_text != self._last_emitted_cookie_text:
+            self._last_emitted_cookie_text = cookie_text
+            self.cookie_refreshed.emit(cookie_text)
+
+
+def _is_baidu_domain_name(domain: str) -> bool:
+    normalized = domain.lstrip(".").casefold()
+    return normalized == "baidu.com" or normalized.endswith(".baidu.com")
 
 
 class WebLoginDialog(_BaiduCookieDialog):
