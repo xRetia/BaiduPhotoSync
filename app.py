@@ -804,9 +804,9 @@ class MainWindow(QMainWindow):
             #advancedNavigation::item { padding: 9px 8px; border-radius: 7px; margin: 2px 0; }
             #advancedNavigation::item:selected { background: #e2efff; color: #175fb5; font-weight: 700; }
             #advancedNavigation::item:hover { background: #edf4ff; }
-            #loginLoadingOverlay { background: #0f1f35; border: none; }
-            #loginLoadingTitle { color: #ffffff; font-size: 19px; font-weight: 700; }
-            #loginLoadingHint { color: #d9e9ff; font-size: 11pt; }
+            #loginLoadingOverlay { background: #ffffff; border: none; }
+            #loginLoadingTitle { color: #14213d; font-size: 19px; font-weight: 700; }
+            #loginLoadingHint { color: #5b677a; font-size: 11pt; }
             #logoutInstruction { color: #b4232a; background: #fff1f2; border: 2px solid #fb7185; border-radius: 8px; padding: 11px 14px; font-size: 14pt; font-weight: 800; }
             QPushButton { background: #ffffff; border: 1px solid #dbe4ef; border-radius: 7px; padding: 7px 12px; color: #22324a; }
             QPushButton[connected="true"] { background: #dcfce7; border-color: #86efac; color: #166534; font-weight: 600; }

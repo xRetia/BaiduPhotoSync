@@ -13,7 +13,7 @@ import time
 from PySide6.QtCore import QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtNetwork import QNetworkCookie
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 try:
     from PySide6.QtWebEngineCore import QWebEngineProfile
@@ -182,8 +182,12 @@ class WebLoginDialog(_BaiduCookieDialog):
         assert self._view is not None
         overlay = QFrame(self._view)
         overlay.setObjectName("loginLoadingOverlay")
+        # Paint an opaque background ourselves so the web page is fully hidden.
+        overlay.setAutoFillBackground(True)
         overlay.setAttribute(Qt.WA_StyledBackground, True)
-        overlay.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        palette = overlay.palette()
+        palette.setColor(overlay.backgroundRole(), QColor("#ffffff"))
+        overlay.setPalette(palette)
         overlay.hide()
         content = QVBoxLayout(overlay)
         content.setContentsMargins(40, 40, 40, 40)
@@ -196,12 +200,10 @@ class WebLoginDialog(_BaiduCookieDialog):
         hint.setObjectName("loginLoadingHint")
         hint.setAlignment(Qt.AlignCenter)
         content.addWidget(hint)
-        spinner = QProgressBar(overlay)
-        spinner.setRange(0, 0)
-        spinner.setTextVisible(False)
-        spinner.setMaximumWidth(280)
+        spinner = _RingSpinner(overlay)
         content.addWidget(spinner, alignment=Qt.AlignHCenter)
         content.addStretch(1)
+        self._spinner = spinner
         self._loading_overlay = overlay
 
     def _set_loading(self, active: bool) -> None:
@@ -211,7 +213,9 @@ class WebLoginDialog(_BaiduCookieDialog):
             self._loading_overlay.setGeometry(self._view.rect())
             self._loading_overlay.show()
             self._loading_overlay.raise_()
+            self._spinner.start()
         else:
+            self._spinner.stop()
             self._loading_overlay.hide()
 
     def resizeEvent(self, event) -> None:
