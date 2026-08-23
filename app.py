@@ -287,6 +287,7 @@ class MainWindow(QMainWindow):
         self._pending_cookie_text = ""
         self._save_session_after_connect = False
         self._ffmpeg_download_dialog: QProgressDialog | None = None
+        self._ffmpeg_downloading = False
         self.albums: list[RemoteAlbum] = []
         self.current_album: RemoteAlbum | None = None
         self.current_media: list[RemoteMedia] = []
@@ -564,6 +565,9 @@ class MainWindow(QMainWindow):
     def _on_compress_video_toggled(self, checked: bool) -> None:
         if not checked:
             return
+        if self._ffmpeg_downloading:
+            # 已有一次下载在进行，忽略重复触发，避免并发下载互相覆盖文件。
+            return
         try:
             locate_ffmpeg()
             self.status.showMessage("已检测到 FFmpeg，视频压缩已启用。", 5000)
@@ -576,10 +580,14 @@ class MainWindow(QMainWindow):
         dialog.setAutoClose(False)
         dialog.setAutoReset(False)
         dialog.setCancelButton(None)
+        # 不允许通过标题栏关闭按钮中断下载，否则会留下进行中的后台任务。
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowCloseButtonHint)
         dialog.setMinimumDuration(0)
         dialog.resize(460, 130)
+        dialog.rejected.connect(self._on_ffmpeg_dialog_rejected)
         dialog.show()
         self._ffmpeg_download_dialog = dialog
+        self._ffmpeg_downloading = True
         self._run_job(
             "正在下载 FFmpeg",
             lambda progress: ensure_windows_ffmpeg(progress),
@@ -587,9 +595,15 @@ class MainWindow(QMainWindow):
             self._ffmpeg_download_failed,
         )
 
+    def _on_ffmpeg_dialog_rejected(self) -> None:
+        # 用户关闭了下载窗口（如按 Esc）：后台下载仍在进行，仅丢弃对话框句柄，
+        # 待下载线程结束后再恢复界面状态，避免重复触发第二次下载。
+        self._ffmpeg_download_dialog = None
+
     def _ffmpeg_download_succeeded(self, result: object) -> None:
         dialog = self._ffmpeg_download_dialog
         self._ffmpeg_download_dialog = None
+        self._ffmpeg_downloading = False
         if dialog is not None:
             dialog.setValue(100)
             dialog.close()
@@ -601,6 +615,7 @@ class MainWindow(QMainWindow):
     def _ffmpeg_download_failed(self, _error: str) -> None:
         dialog = self._ffmpeg_download_dialog
         self._ffmpeg_download_dialog = None
+        self._ffmpeg_downloading = False
         if dialog is not None:
             dialog.close()
         self.compress_video_checkbox.blockSignals(True)
@@ -972,6 +987,9 @@ class MainWindow(QMainWindow):
         self.pause_button.setEnabled(connected and mode == "running")
         self.resume_button.setEnabled(connected and paused)
         self.stop_button.setEnabled(connected and active and mode != "stopping")
+        # 同步进行中禁止刷新相册列表，避免与执行线程争用远端读取。
+        self.album_refresh.setEnabled(connected and not active)
+        self.hero_refresh.setEnabled(connected and not active)
         if mode == "running":
             self.sync_live_label.setText("同步进行中")
         elif mode == "paused":
@@ -1448,6 +1466,9 @@ class MainWindow(QMainWindow):
     def build_sync_plan(self) -> None:
         if not self.client:
             return
+        if self._sync_mode != "idle":
+            # 比较或执行正在进行，忽略重复点击，避免并发生成计划导致数据竞争。
+            return
         root, direction, sort_field, reverse, deletion, workers, compare_mode, compression_options = self._sync_options()
         if not root.is_dir():
             QMessageBox.warning(self, "本地目录无效", "请选择一个有效的同步根目录。")
@@ -1458,6 +1479,9 @@ class MainWindow(QMainWindow):
         self.settings.setValue("list_threads", list_threads)
         skip_oversize = bool(self.settings.value("skip_oversize", True, type=bool))
         LOGGER.debug("生成同步计划：方向=%s，排序=%s，逆序=%s，文件客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s，忽略=%s，跳过超限=%s", direction.value, sort_field.value, reverse, workers, list_threads, compare_mode.value, compression_options.enabled, sorted(self.ignored_album_names), skip_oversize)
+        self._set_sync_controls("planning")
+        self.progress.setValue(0)
+        self.progress.setFormat("正在比较本地与云端")
         self._run_job(
             "正在比较本地与云端",
             lambda progress: SyncEngine(
@@ -1470,7 +1494,12 @@ class MainWindow(QMainWindow):
                 root, direction, sort_field, reverse, deletion, progress, self.ignored_album_names, skip_oversize
             ),
             self._sync_plan_ready,
+            self._sync_plan_failed,
         )
+
+    def _sync_plan_failed(self, _error: str) -> None:
+        # _job_failed 已弹出错误框；这里仅把界面控件恢复为可操作状态。
+        self._set_sync_controls("idle")
 
     def _sync_plan_ready(self, actions: object) -> None:
         self.sync_actions = actions  # type: ignore[assignment]
@@ -1700,6 +1729,8 @@ class MainWindow(QMainWindow):
         self.sync_live_label.setText(f"当前：{action.album_name} / {action.media_name or action.action.value}")
 
     def execute_sync_plan(self) -> None:
+        if self._sync_mode != "idle":
+            return
         if not self.client or not self.sync_actions:
             QMessageBox.information(self, "尚无计划", "请先生成同步计划。")
             return
