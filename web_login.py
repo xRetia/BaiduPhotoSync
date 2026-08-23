@@ -30,6 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 LOGIN_URL = QUrl("https://photo.baidu.com/photo/web/login")
 HOME_URL = QUrl("https://photo.baidu.com/")
+KEEPALIVE_URL = QUrl("https://photo.baidu.com/photo/web/home")
 REQUIRED_LOGIN_COOKIES = {"BAIDUID", "BDUSS"}
 # Cookies that Baidu only issues after the phone confirmation completes a real
 # photo session (never during the mere "scanned, awaiting confirm" state).
@@ -161,11 +162,14 @@ class SessionKeepAlive(QObject):
         self._create_view()
         self._seed_cookies(cookie_text)
         self._timer.start()
+        LOGGER.debug("会话保活已启动：将每 60 秒访问 %s", KEEPALIVE_URL.toString())
         # Cookie insertion into QWebEngineCookieStore is asynchronous.
         QTimer.singleShot(700, self.refresh_now)
 
     def stop(self) -> None:
         """Stop refreshes and destroy the private profile with its in-memory cookies."""
+        if self._active:
+            LOGGER.debug("会话保活已停止。")
         self._active = False
         self._refresh_in_flight = False
         self._timer.stop()
@@ -183,7 +187,8 @@ class SessionKeepAlive(QObject):
         if not self._active or self._view is None or self._refresh_in_flight:
             return
         self._refresh_in_flight = True
-        self._view.setUrl(HOME_URL)
+        LOGGER.debug("会话保活正在访问 %s", KEEPALIVE_URL.toString())
+        self._view.setUrl(KEEPALIVE_URL)
 
     def _create_view(self) -> None:
         assert QWebEngineProfile is not None and QWebEngineView is not None
@@ -232,8 +237,9 @@ class SessionKeepAlive(QObject):
         if not self._active:
             return
         if not ok:
-            self.refresh_failed.emit("hidden WebView could not load the Baidu Photo homepage")
+            self.refresh_failed.emit("hidden WebView could not load the Baidu Photo keepalive page")
             return
+        LOGGER.debug("会话保活页面加载完成，正在检查 Cookie 更新。")
         # Allow Set-Cookie response headers and JavaScript redirects to settle.
         QTimer.singleShot(900, self._publish_refreshed_cookie)
 
@@ -251,7 +257,10 @@ class SessionKeepAlive(QObject):
         cookie_text = json.dumps(records, ensure_ascii=False, sort_keys=True)
         if cookie_text != self._last_emitted_cookie_text:
             self._last_emitted_cookie_text = cookie_text
+            LOGGER.debug("会话保活检测到完整 Cookie 集合，准备保存刷新后的会话。")
             self.cookie_refreshed.emit(cookie_text)
+        else:
+            LOGGER.debug("会话保活完成，本次 Cookie 未发生变化。")
 
 
 def _is_baidu_domain_name(domain: str) -> bool:
@@ -267,6 +276,7 @@ class WebLoginDialog(_BaiduCookieDialog):
     # appeared: QR pages may create provisional/tracking cookies before phone
     # confirmation has granted an actual photo-account session.
     candidate_session = Signal(str)
+    paste_cookie_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -308,6 +318,11 @@ class WebLoginDialog(_BaiduCookieDialog):
         self.reload_button.clicked.connect(self._reload)
         actions.addWidget(self.reload_button)
         actions.addStretch(1)
+        self.paste_cookie_link = QLabel("<a href='paste-cookies'>粘贴 Cookies</a>")
+        self.paste_cookie_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.paste_cookie_link.setStyleSheet("color: #718096; font-size: 10pt;")
+        self.paste_cookie_link.linkActivated.connect(lambda _href: self.paste_cookie_requested.emit())
+        actions.addWidget(self.paste_cookie_link)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.clicked.connect(self.reject)
         actions.addWidget(self.cancel_button)

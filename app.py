@@ -232,14 +232,9 @@ class CookieDialog(QDialog):
         guide.setOpenExternalLinks(True)
         guide.setHtml(
             """
-            <p>本程序通过已登录网页的会话 Cookie 连接一刻相册。Cookie 相当于登录凭据，请仅在自己的电脑上操作，<b>不要发送给任何人</b>。</p>
-            <ol>
-              <li>在 Edge 或 Chrome 登录 <a href='https://photo.baidu.com'>一刻相册</a>，确认能正常查看相册。</li>
-              <li>按 <b>F12</b> 打开开发者工具，进入 <b>Application（应用）→ Storage（存储）→ Cookies</b>。</li>
-              <li>分别选择 <code>https://photo.baidu.com</code> 与 <code>.baidu.com</code>，复制 Cookie 表格行，或用浏览器导出为 JSON。</li>
-              <li>将文本粘贴到下方，选择仅本次使用或保存到本机后连接。</li>
-            </ol>
-            <p>程序兼容“开发者工具复制的制表符文本”和 JSON Cookie 列表。Cookie 不会写入日志。勾选保存后，Cookie 会写入当前 Windows 用户的 Qt 设置存储（并非加密保险箱），请仅在受信任的个人电脑上使用。</p>
+            <p>粘贴已登录浏览器导出的 <code>photo.baidu.com</code> 与 <code>.baidu.com</code> Cookie 表格行或 JSON。Cookie 是登录凭据，请只在自己的受信任设备上使用，且不要发送给任何人。</p>
+            <p>连接成功后，保活功能会在应用运行期间使用隐藏 WebView 携带成功登录的 Cookie，每分钟访问 <code>https://photo.baidu.com/photo/web/home</code>，并在 DEBUG 日志中记录启动、访问、刷新及停止状态。</p>
+            <p>Cookie 内容不会写入日志。保存成功的会话会受到当前 Windows 用户的 DPAPI 保护。</p>
             """
         )
         layout.addWidget(guide, 1)
@@ -248,9 +243,9 @@ class CookieDialog(QDialog):
         self.editor.setMinimumHeight(150)
         self.editor.setPlainText(saved_cookie)
         layout.addWidget(self.editor)
-        self.remember_cookie = QCheckBox("将 Cookie 保存到本机，下次打开时自动填入（明文保存）")
+        self.remember_cookie = QCheckBox("保存到当前 Windows 用户，下次自动登录")
         self.remember_cookie.setChecked(bool(saved_cookie))
-        self.remember_cookie.setToolTip("仅限受信任的个人电脑。保存的 Cookie 不会写入日志或源码压缩包。")
+        self.remember_cookie.setToolTip("已保存的 Cookie 使用 Windows DPAPI 加密，且不会写入日志。")
         layout.addWidget(self.remember_cookie)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         _localize_dialog_buttons(buttons, "连接")
@@ -818,7 +813,6 @@ class MainWindow(QMainWindow):
         browser.setHtml(
             """
             <div style='max-width:920px; margin:12px auto; line-height:1.75;'>
-              <h1 style='color:#143a70; margin-bottom:4px;'>一刻同步</h1>
               <p style='color:#718096; margin-top:0;'>本地相册与一刻相册的桌面同步工具</p>
 
               <div style='background:#fff4f4; border:2px solid #e5484d; border-radius:10px; padding:16px 20px; margin:18px 0;'>
@@ -961,7 +955,13 @@ class MainWindow(QMainWindow):
 
     def _set_debug_logging(self, enabled: bool) -> None:
         self.settings.setValue("debug_logging", enabled)
-        logging.getLogger().setLevel(logging.DEBUG if enabled else logging.INFO)
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG if enabled else logging.INFO)
+        # In windowed builds the console is normally hidden, so the file handler
+        # must also receive DEBUG records when the user explicitly enables it.
+        for handler in root_logger.handlers:
+            if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == ERROR_LOG_PATH:
+                handler.setLevel(logging.DEBUG if enabled else logging.ERROR)
         LOGGER.debug("调试日志已%s", "启用" if enabled else "关闭")
 
     # ----- remote connection and browser ---------------------------
@@ -1068,9 +1068,24 @@ class MainWindow(QMainWindow):
         dialog = WebLoginDialog(self)
         dialog.setModal(True)
         dialog.candidate_session.connect(lambda cookie: self._verify_qr_candidate(dialog, cookie))
+        dialog.paste_cookie_requested.connect(lambda: self._open_paste_cookie_login(dialog))
         dialog.finished.connect(lambda _result: self._login_dialog_finished(dialog))
         self._login_dialog = dialog
         dialog.show()
+
+    def _open_paste_cookie_login(self, qr_dialog: WebLoginDialog) -> None:
+        """Switch from QR sign-in to the deliberately separate pasted-Cookie flow."""
+        dialog = CookieDialog(parent=qr_dialog)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        cookie_text = dialog.cookie_text().strip()
+        if not cookie_text:
+            QMessageBox.warning(self, "Cookie 为空", "请粘贴完整的 Cookie 后再连接。")
+            return
+        # Close the QR dialog first so a failed pasted session can reopen a fresh
+        # QR dialog rather than raising a hidden one.
+        qr_dialog.reject()
+        self._begin_login(cookie_text, save_after_verify=dialog.should_remember_cookie())
 
     def _login_dialog_finished(self, dialog: WebLoginDialog) -> None:
         if self._login_dialog is dialog:
