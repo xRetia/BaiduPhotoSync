@@ -13,16 +13,15 @@ A desktop application for synchronizing local photo folders with Baidu Photo alb
 | Safe defaults | Keep destructive synchronization disabled by default and surface file conflicts before any transfer begins. |
 | Video handling | Optionally create a temporary upload copy for oversize video files while keeping the local original unchanged. |
 | Account session | Use an in-app Baidu QR-code sign-in page and keep the validated local session scoped to the current Windows user. |
-| Windows releases | Choose a standard executable that downloads FFmpeg only when needed or an executable that already includes it. |
+| Windows release | Use the standard executable; it downloads and validates FFmpeg only when video compression is enabled. |
 
 ## Download and Use
 
-Download the newest Windows executable from [GitHub Releases](https://github.com/xRetia/BaiduPhotoSync/releases/latest). Two x64 variants are available so that you can choose the most suitable trade-off.
+Download the newest Windows x64 executable from [GitHub Releases](https://github.com/xRetia/BaiduPhotoSync/releases/latest). The standard build is distributed as a self-contained executable.
 
 | Asset | Recommended for | FFmpeg behavior |
 | --- | --- | --- |
-| `BaiduPhotoSync-<version>-Windows-x64.exe` | Most users who do not need video compression immediately. | The smaller executable downloads and validates FFmpeg only after video compression is enabled. |
-| `BaiduPhotoSync-<version>-Windows-x64-with-ffmpeg.exe` | Offline environments or users who need video compression from first launch. | Includes `ffmpeg.exe` and `ffprobe.exe` inside the executable package. |
+| `BaiduPhotoSync-<version>-Windows-x64.exe` | All supported Windows users. | The executable downloads and validates FFmpeg only after video compression is enabled. |
 
 Run the downloaded `.exe` file, select **Sign In**, and complete the QR-code confirmation in the official Baidu page. After the account is connected, select a local root directory in **Sync Center**, create a plan, inspect the listed actions, and run only the confirmed plan.
 
@@ -58,7 +57,7 @@ The application is designed around an inspect-first workflow. Connect an account
 
 ## Video Compression and FFmpeg
 
-Video compression is optional and disabled by default. When enabled, the application prepares a temporary compressed upload copy for an oversize video and retains the original local file. The standard executable downloads the required Windows FFmpeg tools only after the option is used; the bundled variant contains those tools from the start. The downloadable FFmpeg archive is obtained from the official BtbN build release and checked against its published SHA-256 checksum before installation.[1]
+Video compression is optional and disabled by default. When enabled, the application prepares a temporary compressed upload copy for an oversize video and retains the original local file. The Windows executable downloads the required FFmpeg tools only after the option is used. The downloadable FFmpeg archive is obtained from the official BtbN build release and checked against its published SHA-256 checksum before installation.[1]
 
 ## Privacy and Data Handling
 
@@ -66,12 +65,11 @@ The QR-code flow is displayed in the application rather than requiring a separat
 
 ## Build from Source
 
-The repository includes a GitHub Actions workflow that creates both Windows x64 executable variants from the tagged source. For a local Windows build, install Python, install the dependencies in `requirements.txt` together with PyInstaller, and invoke the release build script. The workflow uses the vendored `pybaiduphoto` implementation and packages the application assets, the embedded browser runtime, and the required Python modules.
+The repository includes a GitHub Actions workflow that creates the standard Windows x64 executable from the tagged source. For a local Windows build, install Python, install the dependencies in `requirements.txt` together with PyInstaller, and invoke the release build script. The workflow uses the vendored `pybaiduphoto` implementation and packages the application assets, the embedded browser runtime, and the required Python modules.
 
 | Build option | Command | Output |
 | --- | --- | --- |
-| Standard | `powershell -ExecutionPolicy Bypass -File scripts\build-windows-release.ps1` | `BaiduPhotoSync-<version>-Windows-x64.exe` |
-| Bundled FFmpeg | `powershell -ExecutionPolicy Bypass -File scripts\build-windows-release.ps1 -WithFFmpeg` | `BaiduPhotoSync-<version>-Windows-x64-with-ffmpeg.exe` |
+| Windows x64 | `powershell -ExecutionPolicy Bypass -File scripts\build-windows-release.ps1` | `BaiduPhotoSync-<version>-Windows-x64.exe` |
 
 ## Support and Responsible Use
 

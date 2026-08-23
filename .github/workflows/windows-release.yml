@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build and publish Windows x64 executables
+    name: Build and publish the Windows x64 executable
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -44,29 +44,15 @@ jobs:
           }
           "value=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build standard executable
+      - name: Build Windows x64 executable
         shell: pwsh
         run: scripts\build-windows-release.ps1 -Version "${{ steps.version.outputs.value }}"
 
-      - name: Preserve standard executable
-        shell: pwsh
-        run: Copy-Item release\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe $env:RUNNER_TEMP\
-
-      - name: Build executable with FFmpeg
-        shell: pwsh
-        run: scripts\build-windows-release.ps1 -WithFFmpeg -Version "${{ steps.version.outputs.value }}"
-
-      - name: Assemble release artifacts
-        shell: pwsh
-        run: |
-          Copy-Item $env:RUNNER_TEMP\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe release\
-          Get-FileHash release\*.exe -Algorithm SHA256 | Format-Table -AutoSize
-
-      - name: Upload build artifacts
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64
-          path: release/*.exe
+          path: release/BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -75,13 +61,10 @@ jobs:
           $tag = "v${{ steps.version.outputs.value }}"
           $title = "Baidu Photo Sync $tag"
           $notes = @"
-          ## Windows x64 executables
+          ## Windows x64 executable
 
-          | Asset | Description |
-          | --- | --- |
-          | `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe` | Standard executable. It downloads and verifies FFmpeg only when video compression is enabled. |
-          | `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64-with-ffmpeg.exe` | Executable with FFmpeg and FFprobe bundled for immediate offline video-compression use. |
+          `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe` is the standard self-contained Windows build. It downloads and validates FFmpeg only when video compression is enabled.
 
           Run the executable, complete QR-code sign-in, build a sync plan, and review it before execution.
           "@
-          gh release create $tag release\*.exe --repo "${{ github.repository }}" --title $title --notes $notes --verify-tag
+          gh release create $tag release\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe --repo "${{ github.repository }}" --title $title --notes $notes --verify-tag
