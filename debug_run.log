@@ -1,0 +1,95 @@
+2026-08-23 15:39:31,858 INFO [MainThread] __main__: 错误日志文件：D:\资源\下载\yike_sync_gui\error.log
+2026-08-23 15:39:32,492 DEBUG [MainThread] __main__: 调试日志已启用
+2026-08-23 15:39:33,092 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['csrfToken']
+2026-08-23 15:39:33,093 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'csrfToken']
+2026-08-23 15:39:33,094 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'csrfToken']
+2026-08-23 15:39:34,335 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'csrfToken']
+2026-08-23 15:39:34,336 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'csrfToken']
+2026-08-23 15:39:34,518 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'csrfToken', 'ppfuid']
+2026-08-23 15:39:34,608 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:34,690 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:34,691 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,865 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,866 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,950 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'XFS', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,953 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'XFS', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,953 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'XFS', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:36,953 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid']
+2026-08-23 15:39:39,176 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,957 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,957 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'STOKEN', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,957 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'STOKEN', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,957 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'STOKEN', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,958 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'STOKEN', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,958 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,958 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:40,958 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,164 INFO [MainThread] web_login: 扫码候选已提交校验，候选 cookie 名称: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,168 DEBUG [Dummy-1] remote_client: 已为网络请求配置默认超时，并为瞬时 TLS/连接错误启用自动重发
+2026-08-23 15:39:42,169 DEBUG [Dummy-1] remote_client: 已初始化一刻相册客户端；已解析 19 个 Cookie 字段
+2026-08-23 15:39:42,259 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,325 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,326 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,326 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:42,722 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:43,271 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:43,272 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:43,272 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:43,272 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:44,811 ERROR [Dummy-1] __main__: 后台操作失败
+Traceback (most recent call last):
+  File "D:\资源\下载\yike_sync_gui\remote_client.py", line 403, in list_albums
+    objects = self._api.getAlbumList_All()
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\API.py", line 147, in getAlbumList_All
+    albs = self.getAlbumList(cursor=cursor)
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\API.py", line 133, in getAlbumList
+    pageInfo = self.req.getReqJson(url, params=params)
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\Requests.py", line 103, in getReqJson
+    data = self.get(url, **kwargs).json()
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\Requests.py", line 76, in get
+    kwargs["params"]["bdstoken"] = self.get_bdstoken_Cache()
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\Requests.py", line 71, in get_bdstoken_Cache
+    self.bdstoken = self.get_bdstoken()
+  File "D:\资源\下载\yike_sync_gui\vendor\pybaiduphoto\Requests.py", line 49, in get_bdstoken
+    response = requests.get(
+  File "D:\资源\下载\yike_sync_gui\remote_client.py", line 293, in timed_get
+    return send_with_retry(original_get, args, kwargs)
+  File "D:\资源\下载\yike_sync_gui\remote_client.py", line 272, in send_with_retry
+    return original(*args, **kwargs)
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\sessions.py", line 724, in send
+    history = [resp for resp in gen]
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\sessions.py", line 724, in <listcomp>
+    history = [resp for resp in gen]
+  File "C:\Komandare\Module\python38\lib\site-packages\requests\sessions.py", line 191, in resolve_redirects
+    raise TooManyRedirects(
+requests.exceptions.TooManyRedirects: Exceeded 30 redirects.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "app.py", line 118, in run
+    self.finished.emit(self.task(self.progress.emit))
+  File "app.py", line 1004, in <lambda>
+    lambda progress: self._connect_client(cookie_text, progress),
+  File "app.py", line 1014, in _connect_client
+    client.verify_login()
+  File "D:\资源\下载\yike_sync_gui\remote_client.py", line 347, in verify_login
+    albums = self.list_albums()
+  File "D:\资源\下载\yike_sync_gui\remote_client.py", line 428, in list_albums
+    raise RemoteClientError("无法读取相册列表，请检查网络和登录 Cookie 是否仍有效。") from last_exc
+remote_client.RemoteClientError: 无法读取相册列表，请检查网络和登录 Cookie 是否仍有效。
+2026-08-23 15:39:45,394 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,395 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,485 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,486 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,486 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,486 DEBUG [MainThread] web_login: cookie 变化，当前百度域可用: ['', 'BAIDUID', 'BAIDUID_BFESS', 'BDUSS', 'BDUSS_BFESS', 'HOSUPPORT', 'HOSUPPORT_BFESS', 'PANPSC', 'PANWEB', 'PANWEB.sig', 'PTOKEN', 'PTOKEN_BFESS', 'STOKEN', 'STOKEN_BFESS', 'UBI', 'UBI_BFESS', 'XFI', 'XFS', 'XFT', 'csrfToken', 'ppfuid', 'pplogid', 'pplogid_BFESS']
+2026-08-23 15:39:45,720 DEBUG [Dummy-2] remote_client: 已初始化一刻相册客户端；已解析 22 个 Cookie 字段
+2026-08-23 15:39:48,047 DEBUG [Dummy-2] remote_client: 云端相册目录从服务器读取完成：143 个相册
+2026-08-23 15:39:49,844 DEBUG [Dummy-3] remote_client: 云端相册目录从服务器读取完成：143 个相册

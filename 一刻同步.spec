@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = ['file_client_worker']
+hiddenimports = ['file_client_worker', 'video_compression', 'ffmpeg_downloader', 'session_store', 'web_login', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets']
 hiddenimports += collect_submodules('pybaiduphoto')
 
 

@@ -1,4 +1,7 @@
 # Python 3.8-compatible runtime dependencies
 PySide6==6.6.3.1
+# QtWebEngineWidgets / QtWebEngineCore are provided by the Addons wheel and
+# are required for the private in-app QR login browser.
+PySide6-Addons==6.6.3.1
 Pillow==10.4.0
 requests==2.32.4

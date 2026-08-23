@@ -88,7 +88,7 @@ def parse_cookie_text(text: str) -> dict[str, str]:
     if not text:
         raise RemoteClientError("尚未导入登录 Cookie。")
 
-    cookies: dict[str, str] = {}
+    cookies: dict[str, tuple[str, str]] = {}
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
@@ -96,7 +96,14 @@ def parse_cookie_text(text: str) -> dict[str, str]:
                 if isinstance(item, dict) and item.get("name") and item.get("value"):
                     domain = str(item.get("domain", ""))
                     if "baidu.com" in domain:
-                        cookies[str(item["name"])] = str(item["value"])
+                        name = str(item["name"])
+                        value = str(item["value"])
+                        # Prefer a domain-scoped cookie (domain starts with ".")
+                        # over a host-only one, so the value sent to
+                        # photo.baidu.com is the universal session cookie.
+                        existing = cookies.get(name)
+                        if existing is None or (not existing[0].startswith(".") and domain.startswith(".")):
+                            cookies[name] = (domain, value)
     except json.JSONDecodeError:
         for line in text.splitlines():
             columns = line.split("\t")
@@ -104,7 +111,10 @@ def parse_cookie_text(text: str) -> dict[str, str]:
                 continue
             name, value, domain = columns[0].strip(), columns[1].strip(), columns[2].strip()
             if name and value and "baidu.com" in domain:
-                cookies[name] = value
+                existing = cookies.get(name)
+                if existing is None or (not existing[0].startswith(".") and domain.startswith(".")):
+                    cookies[name] = (domain, value)
+    cookies = {name: value for name, (_, value) in cookies.items()}
 
     missing = {"BAIDUID", "BDUSS"} - cookies.keys()
     if missing:
@@ -243,13 +253,16 @@ class YikeRemoteClient:
                     size += _count_body_bytes(value)
             return size
 
-        def post_read_timeout(args: tuple, kwargs: dict) -> int:
-            # A larger body needs a larger budget to finish *sending* it before
-            # the socket write times out on a slow uplink. Budget by size at a
-            # conservative 256 KiB/s (60s base), capped so a pathological size
-            # cannot wait forever.
+        def post_socket_timeout(args: tuple, kwargs: dict) -> int:
+            # requests applies this socket timeout while a streamed multipart
+            # request is being written as well as while its response is read.
+            # Budget slow uplinks at 128 KiB/s with a 90s protocol margin: this
+            # avoids turning ordinary 20–30 MiB videos into write timeouts when
+            # Wi-Fi is busy, while the master still owns the hard upper bound.
             size = body_size(args, kwargs)
-            return min(1800, 60 + max(0, size) // (256 * 1024))
+            bytes_per_second = 128 * 1024
+            upload_seconds = (max(0, size) + bytes_per_second - 1) // bytes_per_second
+            return min(2700, 90 + upload_seconds)
 
         def send_with_retry(original, args: tuple, kwargs: dict):
             attempt = 0
@@ -280,7 +293,7 @@ class YikeRemoteClient:
             return send_with_retry(original_get, args, kwargs)
 
         def timed_post(*args, **kwargs):
-            kwargs.setdefault("timeout", (10, post_read_timeout(args, kwargs)))
+            kwargs.setdefault("timeout", (10, post_socket_timeout(args, kwargs)))
             return send_with_retry(original_post, args, kwargs)
 
         requests.get = timed_get
@@ -333,6 +346,18 @@ class YikeRemoteClient:
     def verify_login(self) -> str:
         albums = self.list_albums()
         return f"已连接，当前读取到 {len(albums)} 个相册。"
+
+    def export_cookie_json(self) -> str:
+        """Return the current in-memory Baidu session in WebEngine seed format.
+
+        The value is intended only for the temporary in-process logout webview.
+        It is never logged and must not be written to a file by callers.
+        """
+        records = [
+            {"name": name, "value": value, "domain": ".baidu.com"}
+            for name, value in self._cookies.items()
+        ]
+        return json.dumps(records, ensure_ascii=False)
 
     def export_file_client_context(self, album_id: str) -> tuple[str, dict]:
         """Return the minimum in-memory context for one assigned file client."""

@@ -42,13 +42,13 @@ if exist dist rmdir /s /q dist
 if exist "一刻同步.spec" del /q "一刻同步.spec"
 
 echo [3/3] 正在生成 EXE（首次通常需要数分钟）...
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "一刻同步" --icon "assets\yike_sync.ico" --paths "vendor" --collect-submodules pybaiduphoto --hidden-import file_client_worker --add-data "assets;assets" --add-data "vendor;vendor" app.py
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "一刻同步" --icon "assets\yike_sync.ico" --paths "vendor" --collect-submodules pybaiduphoto --collect-all PySide6.QtWebEngineCore --collect-all PySide6.QtWebEngineWidgets --hidden-import file_client_worker --hidden-import video_compression --hidden-import ffmpeg_downloader --hidden-import session_store --hidden-import web_login --add-data "assets;assets" --add-data "vendor;vendor" app.py
 if errorlevel 1 goto :failed
 
 echo.
 echo 打包完成。
 echo 主程序：%cd%\dist\一刻同步\一刻同步.exe
-echo 注意：请保留 dist\一刻同步 文件夹内的全部文件，再运行一刻同步.exe。
+echo 注意：请保留 dist\一刻同步 文件夹内的全部文件。视频压缩组件将在首次启用时按需下载并校验。
 echo 当前版本保留控制台窗口，方便查看 DEBUG 日志；如不需要日志，可将脚本中的 --console 改为 --windowed 后重新打包。
 echo.
 start "" explorer "%cd%\dist\一刻同步"

@@ -18,7 +18,7 @@ PHOTO_EXTENSIONS = frozenset({
 })
 VIDEO_EXTENSIONS = frozenset({
     ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".flv",
-    ".webm", ".3gp", ".3g2", ".mpg", ".mpeg", ".mts", ".m2ts",
+    ".webm", ".3gp", ".3g2", ".mpg", ".mpeg", ".ts", ".mts", ".m2ts",
 })
 MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 

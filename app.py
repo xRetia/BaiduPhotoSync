@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,14 +26,18 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QProgressDialog,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QSplitter,
     QStatusBar,
     QStyle,
@@ -48,7 +52,11 @@ from PySide6.QtWidgets import (
 )
 
 from remote_client import RemoteAlbum, RemoteClientError, RemoteMedia, UnsupportedRemoteFeature, YikeRemoteClient
-from sync_engine import PlanAction, SortField, SyncAction, SyncControl, SyncDirection, SyncEngine
+from session_store import SessionStore, SessionStoreError
+from web_login import WEBENGINE_AVAILABLE, WebLoginDialog, WebLogoutDialog
+from sync_engine import FileCompareMode, PlanAction, SortField, SyncAction, SyncControl, SyncDirection, SyncEngine
+from video_compression import VideoCompressionError, VideoCompressionOptions, locate_ffmpeg, prepared_video_upload
+from ffmpeg_downloader import FFmpegDownloadError, ensure_windows_ffmpeg
 
 
 class PlanTable(QTableWidget):
@@ -87,6 +95,7 @@ class PlanTable(QTableWidget):
 
 APP_NAME = "一刻同步"
 LOGGER = logging.getLogger(__name__)
+QR_LOGIN_MAX_ATTEMPTS = 8
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_ICON_PATH = APP_ROOT / "assets" / "yike_sync.ico"
 PHOTO_MEDIA_ICON_PATH = APP_ROOT / "assets" / "photo_media.svg"
@@ -157,7 +166,8 @@ class SyncResultDialog(QDialog):
             QTimer.singleShot(50, self._select_all_detail)
         else:
             layout.addWidget(QLabel("没有失败或跳过的项。"))
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        _localize_dialog_buttons(buttons)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
@@ -175,6 +185,26 @@ def _format_duration(seconds: float) -> str:
         return f"{minutes} 分 {sec:02d} 秒"
     hours, minutes = divmod(minutes, 60)
     return f"{hours} 小时 {minutes:02d} 分 {sec:02d} 秒"
+
+
+def _settings_icon(name: str) -> QIcon:
+    """Load the user-provided PNG navigation icon from bundled resources."""
+    return QIcon(str(Path(__file__).resolve().parent / "assets" / "icons" / f"{name}.png"))
+
+
+def _localize_dialog_buttons(buttons: QDialogButtonBox, ok_text: str = "确定") -> None:
+    """Keep every standard dialog action consistently Chinese on all Windows locales."""
+    labels = {
+        QDialogButtonBox.Ok: ok_text,
+        QDialogButtonBox.Cancel: "取消",
+        QDialogButtonBox.Close: "关闭",
+        QDialogButtonBox.Yes: "是",
+        QDialogButtonBox.No: "否",
+    }
+    for standard, text in labels.items():
+        button = buttons.button(standard)
+        if button is not None:
+            button.setText(text)
 
 
 class CookieDialog(QDialog):
@@ -219,7 +249,7 @@ class CookieDialog(QDialog):
         self.remember_cookie.setToolTip("仅限受信任的个人电脑。保存的 Cookie 不会写入日志或源码压缩包。")
         layout.addWidget(self.remember_cookie)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
-        buttons.button(QDialogButtonBox.Ok).setText("连接")
+        _localize_dialog_buttons(buttons, "连接")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -246,10 +276,15 @@ class MainWindow(QMainWindow):
             self.resize(width, height)
         self.setMinimumSize(880, 520)
         self.settings = QSettings("Manus", "YikeSyncGUI")
+        self.session_store = SessionStore(self.settings)
         self.ignored_album_names = self._load_ignored_albums()
         self.client: YikeRemoteClient | None = None
+        self._login_dialog: WebLoginDialog | None = None
+        self._qr_candidate_cookie = ""
+        self._qr_login_attempts = 0
         self._pending_cookie_text = ""
-        self._clear_saved_cookie_after_connect = False
+        self._save_session_after_connect = False
+        self._ffmpeg_download_dialog: QProgressDialog | None = None
         self.albums: list[RemoteAlbum] = []
         self.current_album: RemoteAlbum | None = None
         self.current_media: list[RemoteMedia] = []
@@ -272,6 +307,7 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._set_debug_logging(self.debug_checkbox.isChecked())
         self._set_connected(False)
+        QTimer.singleShot(0, self._restore_or_prompt_login)
 
     # ----- UI layout -------------------------------------------------
     def _build_ui(self) -> None:
@@ -331,71 +367,107 @@ class MainWindow(QMainWindow):
     def _build_advanced_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("高级同步设置")
-        dialog.setMinimumWidth(620)
+        dialog.resize(840, 550)
+        dialog.setMinimumSize(740, 480)
         outer = QVBoxLayout(dialog)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(10)
+        content = QHBoxLayout()
+        content.setSpacing(14)
 
-        grid.addWidget(QLabel("同步方向"), 0, 0)
-        self.direction_combo = QComboBox(dialog)
+        navigation = QListWidget(dialog)
+        navigation.setObjectName("advancedNavigation")
+        navigation.setFixedWidth(165)
+        navigation.setIconSize(QSize(22, 22))
+        navigation.setSpacing(4)
+        for text, icon_name in (("同步", "sync"), ("传输", "transfer"), ("视频", "video"), ("高级", "advanced")):
+            navigation.addItem(QListWidgetItem(_settings_icon(icon_name), text))
+        navigation.setCurrentRow(0)
+        pages = QStackedWidget(dialog)
+        content.addWidget(navigation)
+        content.addWidget(pages, 1)
+        outer.addLayout(content, 1)
+
+        sync_page = QWidget(dialog)
+        sync_grid = QGridLayout(sync_page)
+        sync_grid.setHorizontalSpacing(12)
+        sync_grid.setVerticalSpacing(14)
+        sync_grid.addWidget(QLabel("同步方向"), 0, 0)
+        self.direction_combo = QComboBox(sync_page)
         for item in SyncDirection:
             self.direction_combo.addItem(item.value, item.value)
-        grid.addWidget(self.direction_combo, 0, 1)
-
-        grid.addWidget(QLabel("相册处理顺序"), 0, 2)
-        self.sort_combo = QComboBox(dialog)
+        sync_grid.addWidget(self.direction_combo, 0, 1)
+        sync_grid.addWidget(QLabel("相册处理顺序"), 1, 0)
+        self.sort_combo = QComboBox(sync_page)
         for item in SortField:
             self.sort_combo.addItem(item.value, item.value)
-        grid.addWidget(self.sort_combo, 0, 3)
-
-        grid.addWidget(QLabel("排序"), 0, 4)
-        self.order_combo = QComboBox(dialog)
+        sync_grid.addWidget(self.sort_combo, 1, 1)
+        sync_grid.addWidget(QLabel("排序"), 2, 0)
+        self.order_combo = QComboBox(sync_page)
         self.order_combo.addItem("正序", False)
         self.order_combo.addItem("逆序", True)
-        grid.addWidget(self.order_combo, 0, 5)
-
+        sync_grid.addWidget(self.order_combo, 2, 1)
+        sync_grid.addWidget(QLabel("文件对比模式"), 3, 0)
+        self.compare_mode_combo = QComboBox(sync_page)
+        for item in FileCompareMode:
+            self.compare_mode_combo.addItem(item.value, item.value)
+        self.compare_mode_combo.setToolTip("智能（推荐）会识别同名压缩视频和异名同内容副本；仅按文件名适合纯镜像；内容优先会标记同名但内容不同的非视频冲突。")
+        sync_grid.addWidget(self.compare_mode_combo, 3, 1)
         self.delete_checkbox = QCheckBox("启用同步删除（危险，默认关闭）")
-        grid.addWidget(self.delete_checkbox, 1, 0, 1, 3)
-        self.debug_checkbox = QCheckBox("终端输出 DEBUG 日志")
-        self.debug_checkbox.setChecked(self.settings.value("debug_logging", True, type=bool))
-        self.debug_checkbox.toggled.connect(self._set_debug_logging)
-        grid.addWidget(self.debug_checkbox, 1, 3, 1, 3)
+        sync_grid.addWidget(self.delete_checkbox, 4, 0, 1, 2)
+        sync_grid.setRowStretch(5, 1)
+        pages.addWidget(sync_page)
 
+        transfer_page = QWidget(dialog)
+        transfer_grid = QGridLayout(transfer_page)
+        transfer_grid.setHorizontalSpacing(12)
+        transfer_grid.setVerticalSpacing(14)
         self.size_limit_checkbox = QCheckBox("跳过超过普通用户大小限制的文件（照片/视频均 30MB）")
         self.size_limit_checkbox.setChecked(self.settings.value("skip_oversize", True, type=bool))
-        self.size_limit_checkbox.setToolTip(
-            "普通（非超级会员）账号的单文件大小上限约为 30MB（照片与视频相同）。"
-            "勾选后，超过上限的文件会在计划中直接标记为“已跳过”并写明原因，"
-            "不必等到服务端拒绝才看到错误码。超级会员账号请取消勾选。"
-        )
-        grid.addWidget(self.size_limit_checkbox, 2, 0, 1, 6)
-
-        grid.addWidget(QLabel("文件客户端并发"), 3, 0)
-        self.worker_spin = QSpinBox(dialog)
+        self.size_limit_checkbox.setToolTip("启用视频压缩时，超过限制的视频会优先生成临时压缩副本上传；其他超限文件仍会跳过。")
+        transfer_grid.addWidget(self.size_limit_checkbox, 0, 0, 1, 2)
+        transfer_grid.addWidget(QLabel("文件上传并发"), 1, 0)
+        self.worker_spin = QSpinBox(transfer_page)
         self.worker_spin.setRange(1, 10)
         self.worker_spin.setValue(int(self.settings.value("file_client_workers", 2)))
-        self.worker_spin.setToolTip("主控制器同时下发的单文件客户端数（1–10）。每个客户端只上传一个指定文件并回报 FSID；主控制器每累计 50 个 FSID 即统一入册。传输中 TLS/连接中断会自动换新连接重发；上传最终失败会跳过该文件并继续，不阻塞后续文件。日常建议 2；受控验证可使用 10。")
-        grid.addWidget(self.worker_spin, 3, 1)
-
-        grid.addWidget(QLabel("读取相册列表线程数"), 3, 2)
-        self.list_threads_spin = QSpinBox(dialog)
+        self.worker_spin.setToolTip("主控制器同时下发的单文件客户端数（1–10）。大于等于 16MB 的传输会自动独占上行链路，避免多路大视频写超时。")
+        transfer_grid.addWidget(self.worker_spin, 1, 1)
+        transfer_grid.addWidget(QLabel("读取相册列表线程数"), 2, 0)
+        self.list_threads_spin = QSpinBox(transfer_page)
         self.list_threads_spin.setRange(1, 16)
         self.list_threads_spin.setValue(int(self.settings.value("list_threads", 4)))
-        self.list_threads_spin.setToolTip("生成/执行计划时并行读取各云端相册媒体列表的线程数（1–16）。线程越多读取越快，但并发请求越多；若触发账号限流请调小。默认 4。")
-        grid.addWidget(self.list_threads_spin, 3, 3)
+        self.list_threads_spin.setToolTip("生成计划时并行读取云端相册列表的线程数（1–16）。默认 4；如遇限流可调小。")
+        transfer_grid.addWidget(self.list_threads_spin, 2, 1)
+        transfer_grid.setRowStretch(3, 1)
+        pages.addWidget(transfer_page)
 
-        ignored_hint = QLabel("右键左侧相册可加入忽略列表")
+        video_page = QWidget(dialog)
+        video_layout = QVBoxLayout(video_page)
+        self.compress_video_checkbox = QCheckBox("压缩视频到30M以内")
+        self.compress_video_checkbox.setChecked(self.settings.value("compress_oversize_videos", False, type=bool))
+        self.compress_video_checkbox.setToolTip("启用时，程序在本地保留高清原件，仅上传临时压缩副本。")
+        video_layout.addWidget(self.compress_video_checkbox)
+        video_note = QLabel("免费用户单个视频不能超过30M，如果视频上传失败可开启，但会影响视频画质。")
+        video_note.setWordWrap(True)
+        video_note.setObjectName("muted")
+        video_layout.addWidget(video_note)
+        video_layout.addStretch(1)
+        pages.addWidget(video_page)
+
+        advanced_page = QWidget(dialog)
+        advanced_layout = QVBoxLayout(advanced_page)
+        self.debug_checkbox = QCheckBox("写入 DEBUG 日志")
+        self.debug_checkbox.setChecked(self.settings.value("debug_logging", True, type=bool))
+        self.debug_checkbox.toggled.connect(self._set_debug_logging)
+        advanced_layout.addWidget(self.debug_checkbox)
+        ignored_hint = QLabel("提示：在同步中心左侧相册列表上点击右键，可将相册加入或移出忽略列表。")
+        ignored_hint.setWordWrap(True)
         ignored_hint.setObjectName("muted")
-        grid.addWidget(ignored_hint, 4, 0, 1, 6)
+        advanced_layout.addWidget(ignored_hint)
+        advanced_layout.addStretch(1)
+        pages.addWidget(advanced_page)
 
-        guidance = QLabel("先比较并检查右侧计划，再执行。按扩展名选择照片/视频（jpg、png、mp4 等），其余扩展名或空文件显示为跳过。文件客户端只上传并回报 FSID；主控制器每累计 50 个成功上传的文件即统一加入相册，最后不足 50 的尾批也会加入。上传最终失败（网络/接口异常）的文件标记为已跳过，其余文件继续；网络恢复后重新生成计划即可补传。")
-        guidance.setWordWrap(True)
-        guidance.setObjectName("muted")
-        grid.addWidget(guidance, 5, 0, 1, 6)
-
-        outer.addLayout(grid)
+        navigation.currentRowChanged.connect(pages.setCurrentIndex)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _localize_dialog_buttons(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         outer.addWidget(buttons)
@@ -403,6 +475,9 @@ class MainWindow(QMainWindow):
 
         self.advanced_dialog = dialog
         self._load_advanced_settings()
+        self.compress_video_checkbox.toggled.connect(self._on_compress_video_toggled)
+        if self.compress_video_checkbox.isChecked():
+            QTimer.singleShot(0, lambda: self._on_compress_video_toggled(True))
 
     def open_advanced_settings(self) -> None:
         self.advanced_dialog.exec()
@@ -416,6 +491,10 @@ class MainWindow(QMainWindow):
         )
         self.order_combo.setCurrentIndex(self.order_combo.findData(self.settings.value("reverse", False, type=bool)))
         self.delete_checkbox.setChecked(self.settings.value("deletion", False, type=bool))
+        self.compress_video_checkbox.setChecked(self.settings.value("compress_oversize_videos", False, type=bool))
+        self.compare_mode_combo.setCurrentIndex(
+            self.compare_mode_combo.findData(str(self.settings.value("file_compare_mode", FileCompareMode.SMART.value)))
+        )
         self.worker_spin.setValue(int(self.settings.value("file_client_workers", 2)))
         self.list_threads_spin.setValue(int(self.settings.value("list_threads", 4)))
 
@@ -428,6 +507,59 @@ class MainWindow(QMainWindow):
         self.settings.setValue("list_threads", self.list_threads_spin.value())
         self.settings.setValue("debug_logging", self.debug_checkbox.isChecked())
         self.settings.setValue("skip_oversize", self.size_limit_checkbox.isChecked())
+        self.settings.setValue("compress_oversize_videos", self.compress_video_checkbox.isChecked())
+        self.settings.setValue("file_compare_mode", self.compare_mode_combo.currentData())
+
+    def _on_compress_video_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        try:
+            locate_ffmpeg()
+            self.status.showMessage("已检测到 FFmpeg，视频压缩已启用。", 5000)
+            return
+        except VideoCompressionError:
+            pass
+        dialog = QProgressDialog("正在准备视频压缩组件…", "", 0, 100, self)
+        dialog.setWindowTitle("下载视频压缩组件")
+        dialog.setWindowModality(Qt.ApplicationModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setCancelButton(None)
+        dialog.setMinimumDuration(0)
+        dialog.resize(460, 130)
+        dialog.show()
+        self._ffmpeg_download_dialog = dialog
+        self._run_job(
+            "正在下载 FFmpeg",
+            lambda progress: ensure_windows_ffmpeg(progress),
+            self._ffmpeg_download_succeeded,
+            self._ffmpeg_download_failed,
+        )
+
+    def _ffmpeg_download_succeeded(self, result: object) -> None:
+        dialog = self._ffmpeg_download_dialog
+        self._ffmpeg_download_dialog = None
+        if dialog is not None:
+            dialog.setValue(100)
+            dialog.close()
+        downloaded = bool(getattr(result, "downloaded", False))
+        message = "视频压缩组件已下载并校验完成。" if downloaded else "已检测到可用的视频压缩组件。"
+        self.status.showMessage(message, 8000)
+        QMessageBox.information(self, "视频压缩已就绪", message)
+
+    def _ffmpeg_download_failed(self, _error: str) -> None:
+        dialog = self._ffmpeg_download_dialog
+        self._ffmpeg_download_dialog = None
+        if dialog is not None:
+            dialog.close()
+        self.compress_video_checkbox.blockSignals(True)
+        self.compress_video_checkbox.setChecked(False)
+        self.compress_video_checkbox.blockSignals(False)
+        QMessageBox.warning(
+            self,
+            "下载视频压缩组件失败",
+            "未能下载或校验 FFmpeg，视频压缩已关闭。请检查网络后重新勾选该选项。",
+        )
 
     def _load_ignored_albums(self) -> set[str]:
         raw = self.settings.value("ignored_album_names", "[]")
@@ -539,6 +671,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(options)
 
         controls = QHBoxLayout()
+        controls.setContentsMargins(12, 0, 12, 0)
+        controls.setSpacing(8)
         self.plan_button = self._button("比较并生成计划", self.build_sync_plan, True, QStyle.SP_BrowserReload)
         self.execute_button = self._button("执行已确认计划", self.execute_sync_plan, icon=QStyle.SP_DialogApplyButton)
         self.pause_button = self._button("暂停", self.pause_sync, icon=QStyle.SP_MediaPause)
@@ -611,24 +745,35 @@ class MainWindow(QMainWindow):
         browser.setOpenExternalLinks(True)
         browser.setHtml(
             """
-            <h2>登录令牌获取与安全使用</h2>
-            <p>本程序使用一刻相册网页登录后的 Cookie 连接远端接口。Cookie 是登录凭据，请仅保留在自己的电脑上，切勿发给他人、提交到网盘或写入同步目录。</p>
-            <h3>导入步骤</h3>
-            <ol>
-              <li>用 Edge 或 Chrome 登录 <a href='https://photo.baidu.com'>photo.baidu.com</a>。</li>
-              <li>按 <b>F12</b> 打开开发者工具，进入 <b>Application（应用）→ Storage（存储）→ Cookies</b>。</li>
-              <li>选择 <code>https://photo.baidu.com</code> 与 <code>.baidu.com</code>，复制 Cookie 表格的全部行，或导出为 JSON Cookie 列表。</li>
-              <li>点击主工具栏的“登录”，粘贴文本后选择“仅本次连接”。</li>
-            </ol>
-            <p>程序只在内存内使用 Cookie；关闭应用即丢弃。Cookie 过期时，重新登录并再次导入即可。</p>
-            <h2>同步说明</h2>
-            <p>本地根目录的直接子文件夹会映射为云端相册，直接文件会映射为该相册的媒体。同步中心支持按文件夹名称、修改日期或创建日期正序/逆序生成计划。两端已有同名媒体时会按“已存在”跳过，不进入右侧可执行计划；执行前仍应检查删除项。</p>
-            <h2>已知接口限制</h2>
-            <ul>
-              <li>远端媒体重命名接口未在当前 API 中验证，按钮会说明限制而不会进行危险替代操作。</li>
-              <li>为避免重复上传或下载，双向同步将两端已有同名媒体视为已存在并跳过，不自动覆盖或删除任一侧。</li>
-              <li>该程序使用非官方接口实现；接口或会话格式变化时可能需要更新。</li>
-            </ul>
+            <div style='max-width:920px; margin:12px auto; line-height:1.75;'>
+              <h1 style='color:#143a70; margin-bottom:4px;'>一刻同步</h1>
+              <p style='color:#718096; margin-top:0;'>本地相册与一刻相册的桌面同步工具</p>
+
+              <div style='background:#fff4f4; border:2px solid #e5484d; border-radius:10px; padding:16px 20px; margin:18px 0;'>
+                <div style='color:#b4232a; font-size:18pt; font-weight:800; text-align:center;'>本软件免费使用，禁止收费倒卖本软件，软件仅供学习请于24小时内删除</div>
+              </div>
+
+              <h2 style='color:#1d63bf;'>登录与账户安全</h2>
+              <p>首次打开或本机登录会话失效时，程序会展示百度官方二维码。请使用百度 App 或一刻相册 App 扫码并在手机确认。扫码后程序会自动在窗口内验证一刻相册权限；如遇网络抖动，会自动再尝试一次。验证成功才会进入主界面，失败时二维码保留在当前窗口，可刷新后重试。</p>
+              <p>已验证的登录信息使用 Windows DPAPI 加密保存，仅供当前 Windows 用户使用。退出登录会打开临时网页，请在右上角账户菜单完成百度官方退出；程序确认网页会话失效后才会清除本机登录信息。</p>
+
+              <h2 style='color:#1d63bf;'>同步与文件对比</h2>
+              <p>选择本地根目录后，直接子文件夹会映射为云端相册。请先点击“比较并生成计划”，核对右侧计划后再执行。默认“智能”文件对比会识别异名同内容副本，并将云端同名压缩视频视为已同步，从而保留本地高清原件而不重复上传。</p>
+              <p>大于 16MB 的文件会自动独占上行链路，避免多路大视频同时写入造成网络超时。涉及删除的计划会在执行前再次提示确认。</p>
+
+              <h2 style='color:#1d63bf;'>视频压缩</h2>
+              <p>免费用户单个视频不能超过 30M。若视频上传失败，可在“高级设置 → 视频”勾选“压缩视频到30M以内”。程序会保留本地高清原件，仅上传同名临时压缩副本；压缩可能影响画质。首次启用时，如未检测到 FFmpeg，程序会从已配置的公开发布源下载并校验后再使用。</p>
+
+              <h2 style='color:#1d63bf;'>关于</h2>
+              <table cellpadding='7' cellspacing='0' style='border-collapse:collapse; width:100%; border:1px solid #dbe4ef;'>
+                <tr style='background:#f4f7fb;'><td><b>软件名称</b></td><td>一刻同步</td></tr>
+                <tr><td><b>运行环境</b></td><td>Windows 桌面程序</td></tr>
+                <tr style='background:#f4f7fb;'><td><b>登录方式</b></td><td>百度官方二维码网页登录</td></tr>
+                <tr><td><b>同步说明</b></td><td>使用非官方接口实现；接口或会话格式变化时可能需要更新。</td></tr>
+                <tr style='background:#f4f7fb;'><td><b>反馈前建议</b></td><td>在“高级设置 → 高级”启用 DEBUG 日志，并保留错误发生时间和操作步骤。</td></tr>
+              </table>
+              <p style='margin-top:18px; color:#718096;'>官网：<a href='https://photo.baidu.com/'>https://photo.baidu.com/</a></p>
+            </div>
             """
         )
         return browser
@@ -655,6 +800,14 @@ class MainWindow(QMainWindow):
             QTabWidget::pane { border: none; }
             QTabBar::tab { background: transparent; padding: 10px 16px; margin-right: 4px; color: #5b677a; }
             QTabBar::tab:selected { color: #1d63bf; border-bottom: 3px solid #2577d9; font-weight: 700; }
+            #advancedNavigation { background: #f7f9fc; border: 1px solid #e3e9f2; border-radius: 10px; padding: 6px; outline: none; }
+            #advancedNavigation::item { padding: 9px 8px; border-radius: 7px; margin: 2px 0; }
+            #advancedNavigation::item:selected { background: #e2efff; color: #175fb5; font-weight: 700; }
+            #advancedNavigation::item:hover { background: #edf4ff; }
+            #loginLoadingOverlay { background: #0f1f35; border: none; }
+            #loginLoadingTitle { color: #ffffff; font-size: 19px; font-weight: 700; }
+            #loginLoadingHint { color: #d9e9ff; font-size: 11pt; }
+            #logoutInstruction { color: #b4232a; background: #fff1f2; border: 2px solid #fb7185; border-radius: 8px; padding: 11px 14px; font-size: 14pt; font-weight: 800; }
             QPushButton { background: #ffffff; border: 1px solid #dbe4ef; border-radius: 7px; padding: 7px 12px; color: #22324a; }
             QPushButton[connected="true"] { background: #dcfce7; border-color: #86efac; color: #166534; font-weight: 600; }
             QPushButton:hover { background: #f2f7ff; border-color: #9ec3f6; }
@@ -676,6 +829,7 @@ class MainWindow(QMainWindow):
         label: str,
         task: Callable[[Callable[[int, str], None]], object],
         on_success: Callable[[object], None] | None = None,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
         self.progress.setValue(0)
         self.progress.setFormat(label)
@@ -685,7 +839,7 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.progress.connect(self._update_progress)
         worker.finished.connect(lambda result: self._job_success(thread, worker, result, on_success))
-        worker.failed.connect(lambda error: self._job_failed(thread, worker, error))
+        worker.failed.connect(lambda error: self._job_failed(thread, worker, error, on_failure))
         thread.finished.connect(lambda: self._thread_finished(thread))
         thread.start()
         self._running_threads.append(thread)
@@ -701,10 +855,19 @@ class MainWindow(QMainWindow):
         worker.deleteLater()
         thread.quit()
 
-    def _job_failed(self, thread: QThread, worker: Worker, error: str) -> None:
+    def _job_failed(
+        self,
+        thread: QThread,
+        worker: Worker,
+        error: str,
+        callback: Callable[[str], None] | None = None,
+    ) -> None:
         self.progress.setValue(0)
         self.progress.setFormat("操作失败")
-        QMessageBox.critical(self, "操作失败", "操作未完成。详细错误已写入 error.log。")
+        if callback:
+            callback(error)
+        else:
+            QMessageBox.critical(self, "操作失败", "操作未完成。详细错误已写入 error.log。")
         worker.deleteLater()
         thread.quit()
 
@@ -714,8 +877,12 @@ class MainWindow(QMainWindow):
         thread.deleteLater()
 
     def _update_progress(self, value: int, text: str) -> None:
-        self.progress.setValue(max(0, min(100, value)))
+        safe_value = max(0, min(100, value))
+        self.progress.setValue(safe_value)
         self.progress.setFormat(text)
+        if self._ffmpeg_download_dialog is not None:
+            self._ffmpeg_download_dialog.setValue(safe_value)
+            self._ffmpeg_download_dialog.setLabelText(text)
 
     def _set_debug_logging(self, enabled: bool) -> None:
         self.settings.setValue("debug_logging", enabled)
@@ -762,46 +929,186 @@ class MainWindow(QMainWindow):
         else:
             self.sync_live_label.setText("同步待命")
 
+    def _restore_or_prompt_login(self) -> None:
+        """Validate the saved session first; show Baidu QR only when needed."""
+        saved_cookie = self.session_store.load().strip()
+        if saved_cookie:
+            self.status.showMessage("正在校验本机保存的登录会话…")
+            self._begin_login(saved_cookie, save_after_verify=True)
+            return
+        self.status.showMessage("未发现有效登录信息，请扫描二维码登录。")
+        self._open_qr_login()
+
     def connect_account(self) -> None:
-        saved_cookie = str(self.settings.value("saved_cookie", ""))
-        dialog = CookieDialog(saved_cookie, self)
-        if dialog.exec() != QDialog.Accepted:
+        if self.client is not None:
+            self._show_account_menu()
             return
-        cookie_text = dialog.cookie_text().strip()
-        if not cookie_text:
-            QMessageBox.warning(self, "缺少 Cookie", "请粘贴 Cookie 后再连接。")
+        self._open_qr_login()
+
+    def _open_qr_login(self) -> None:
+        if not WEBENGINE_AVAILABLE:
+            QMessageBox.critical(
+                self,
+                "缺少二维码登录组件",
+                "当前程序包没有 Qt WebEngine，无法展示百度二维码。请使用包含 PySide6-Addons 的完整 Windows 安装包。",
+            )
             return
-        self._pending_cookie_text = cookie_text if dialog.should_remember_cookie() else ""
-        self._clear_saved_cookie_after_connect = not dialog.should_remember_cookie()
+        if self._login_dialog is not None:
+            self._login_dialog.raise_()
+            self._login_dialog.activateWindow()
+            return
+        dialog = WebLoginDialog(self)
+        dialog.setModal(True)
+        dialog.candidate_session.connect(lambda cookie: self._verify_qr_candidate(dialog, cookie))
+        dialog.finished.connect(lambda _result: self._login_dialog_finished(dialog))
+        self._login_dialog = dialog
+        dialog.show()
+
+    def _login_dialog_finished(self, dialog: WebLoginDialog) -> None:
+        if self._login_dialog is dialog:
+            self._login_dialog = None
+            self._qr_candidate_cookie = ""
+            self._qr_login_attempts = 0
+            self._pending_cookie_text = ""
+            self._save_session_after_connect = False
+
+    def _verify_qr_candidate(self, dialog: WebLoginDialog, cookie_text: str) -> None:
+        self._qr_candidate_cookie = cookie_text
+        self._qr_login_attempts = 0
+        self._start_qr_login_validation(dialog)
+
+    def _start_qr_login_validation(self, dialog: WebLoginDialog) -> None:
+        # Always read the current cookie jar from the live webview rather than
+        # reusing the first snapshot: the QR confirmation may still be settling
+        # a final BDUSS, and re-verifying with a stale cookie would loop forever.
+        cookie_text = dialog.cookie_text() if dialog is not None else self._qr_candidate_cookie
+        self._qr_candidate_cookie = cookie_text
+        self._begin_login(
+            cookie_text,
+            save_after_verify=True,
+            on_success=lambda client: self._qr_login_succeeded(dialog, client),
+            on_failure=lambda _error: self._qr_login_failed(dialog),
+        )
+
+    def _begin_login(
+        self,
+        cookie_text: str,
+        save_after_verify: bool,
+        on_success: Callable[[object], None] | None = None,
+        on_failure: Callable[[str], None] | None = None,
+    ) -> None:
+        self._pending_cookie_text = cookie_text
+        self._save_session_after_connect = save_after_verify
         self._run_job(
-            "正在验证登录会话",
+            "正在验证一刻相册登录会话",
             lambda progress: self._connect_client(cookie_text, progress),
-            self._connected,
+            on_success or self._connected,
+            on_failure or self._login_failed,
         )
 
     @staticmethod
     def _connect_client(cookie_text: str, progress: Callable[[int, str], None]) -> YikeRemoteClient:
-        progress(15, "正在解析登录信息")
+        progress(15, "正在解析扫码会话")
         client = YikeRemoteClient(cookie_text)
-        progress(55, "正在验证远端会话")
+        progress(55, "正在验证一刻相册访问权限")
         client.verify_login()
         progress(100, "登录验证成功")
         return client
 
+    def _login_failed(self, _error: str) -> None:
+        self.session_store.clear()
+        self._pending_cookie_text = ""
+        self._save_session_after_connect = False
+        self.status.showMessage("登录会话无效或已过期，请重新扫码登录。", 8000)
+        QTimer.singleShot(0, self._open_qr_login)
+
+    def _qr_login_failed(self, dialog: WebLoginDialog) -> None:
+        if self._login_dialog is dialog and self._qr_login_attempts < QR_LOGIN_MAX_ATTEMPTS - 1:
+            self._qr_login_attempts += 1
+            next_attempt = self._qr_login_attempts + 1
+            delay_ms = min(5000, 900 + (self._qr_login_attempts - 1) * 650)
+            delay_seconds = delay_ms / 1000
+            dialog.verification_retrying(next_attempt, QR_LOGIN_MAX_ATTEMPTS, delay_seconds)
+            self.status.showMessage(
+                f"第 {self._qr_login_attempts}/{QR_LOGIN_MAX_ATTEMPTS} 次扫码验证未完成，将自动进行第 {next_attempt} 次验证。",
+                int(delay_ms + 5000),
+            )
+            QTimer.singleShot(delay_ms, lambda: self._start_qr_login_validation(dialog))
+            return
+        self._pending_cookie_text = ""
+        self._save_session_after_connect = False
+        if self._login_dialog is dialog:
+            dialog.verification_failed(f"已自动尝试 {QR_LOGIN_MAX_ATTEMPTS} 次，仍未通过一刻相册权限校验")
+        self.status.showMessage(f"扫码会话已自动尝试 {QR_LOGIN_MAX_ATTEMPTS} 次，二维码窗口仍保持打开。", 8000)
+
+    def _qr_login_succeeded(self, dialog: WebLoginDialog, client: object) -> None:
+        if self._login_dialog is not dialog:
+            return
+        self._qr_login_attempts = 0
+        self._qr_candidate_cookie = ""
+        dialog.verification_succeeded()
+        self._connected(client)
+        QTimer.singleShot(180, dialog.accept)
+
     def _connected(self, client: object) -> None:
         self.client = client  # type: ignore[assignment]
-        if self._pending_cookie_text:
-            self.settings.setValue("saved_cookie", self._pending_cookie_text)
-            self.status.showMessage("账户已连接；Cookie 已按你的选择保存到本机设置。", 5000)
-        elif self._clear_saved_cookie_after_connect:
-            self.settings.remove("saved_cookie")
-            self.status.showMessage("账户已连接；Cookie 仅本次使用，已清除本机保存内容。", 5000)
-        else:
-            self.status.showMessage("账户已连接；Cookie 仅在内存中使用。", 5000)
+        saved = False
+        if self._pending_cookie_text and self._save_session_after_connect:
+            try:
+                self.session_store.save(self._pending_cookie_text)
+                saved = True
+            except SessionStoreError as exc:
+                LOGGER.warning("登录会话未持久化：%s", exc)
+                self.status.showMessage("账户已连接，但 Windows DPAPI 保存失败；会话仅在本次运行有效。", 8000)
+        if saved:
+            self.status.showMessage("账户已连接；扫码会话已使用 Windows DPAPI 加密保存。", 5000)
+        elif not self._pending_cookie_text:
+            self.status.showMessage("账户已连接；会话仅在内存中使用。", 5000)
         self._pending_cookie_text = ""
-        self._clear_saved_cookie_after_connect = False
+        self._save_session_after_connect = False
         self._set_connected(True)
         self.refresh_albums()
+
+    def _show_account_menu(self) -> None:
+        menu = QMenu(self)
+        logout_web = menu.addAction("退出登录")
+        selected = menu.exec(self.hero_connect.mapToGlobal(self.hero_connect.rect().bottomLeft()))
+        if selected == logout_web:
+            self._logout_via_web()
+
+    def _can_logout(self) -> bool:
+        if self._sync_mode != "idle":
+            QMessageBox.warning(self, "同步正在运行", "请先暂停或停止同步并等待当前网络请求结束，再退出登录。")
+            return False
+        return True
+
+    def _clear_connected_account(self) -> None:
+        self.session_store.clear()
+        self.client = None
+        self._pending_cookie_text = ""
+        self._save_session_after_connect = False
+        self.albums = []
+        self.current_album = None
+        self.current_media = []
+        self.sync_actions = []
+        self._sync_actions_by_sequence.clear()
+        self.album_tree.clear()
+        self.media_table.setRowCount(0)
+        self.plan_table.setRowCount(0)
+        self._set_connected(False)
+
+    def _logout_via_web(self) -> None:
+        if not self._can_logout() or self.client is None:
+            return
+        dialog = WebLogoutDialog(self.client.export_cookie_json(), self)
+        if dialog.exec() != QDialog.Accepted:
+            self.status.showMessage("未检测到网页退出完成，本机登录会话仍保留。", 6000)
+            return
+        if not dialog.logout_verified():
+            self.status.showMessage("网页退出状态无法确认，本机登录会话仍保留。", 6000)
+            return
+        self._clear_connected_account()
+        self.status.showMessage("已验证百度网页登录会话失效，并已清除本机登录信息。", 8000)
 
     def refresh_albums(self) -> None:
         if not self.client:
@@ -963,7 +1270,18 @@ class MainWindow(QMainWindow):
 
     def _upload_media(self, album_id: str, files: list[Path], progress: Callable[[int, str], None]) -> None:
         assert self.client
-        self.client.upload_files(album_id, files, progress)
+        compression_options = VideoCompressionOptions(
+            enabled=bool(self.settings.value("compress_oversize_videos", False, type=bool))
+        )
+        total = max(1, len(files))
+        for index, source in enumerate(files, start=1):
+            def local_progress(value: int, message: str) -> None:
+                fraction = max(0, min(100, value)) / 100
+                progress(int(((index - 1) + fraction) / total * 100), message)
+
+            with prepared_video_upload(source, compression_options, local_progress) as prepared:
+                upload_path = prepared.path if prepared is not None else source
+                self.client.upload_files(album_id, [upload_path], local_progress)
 
     def download_media(self) -> None:
         if not self.client or not self.current_album:
@@ -1026,19 +1344,30 @@ class MainWindow(QMainWindow):
             self.local_root.setText(directory)
             self.settings.setValue("local_root", directory)
 
-    def _sync_options(self) -> tuple[Path, SyncDirection, SortField, bool, bool, int]:
+    def _sync_options(self) -> tuple[Path, SyncDirection, SortField, bool, bool, int, FileCompareMode, VideoCompressionOptions]:
         root = Path(self.local_root.text().strip())
         # QComboBox returns a plain string for str-based Enum values on some
         # PySide6/Windows builds, so restore the Enum explicitly here.
         direction = SyncDirection(str(self.direction_combo.currentData()))
         sort_field = SortField(str(self.sort_combo.currentData()))
+        compare_mode = FileCompareMode(str(self.compare_mode_combo.currentData()))
         reverse = bool(self.order_combo.currentData())
-        return root, direction, sort_field, reverse, self.delete_checkbox.isChecked(), self.worker_spin.value()
+        compression_options = VideoCompressionOptions(enabled=self.compress_video_checkbox.isChecked())
+        return (
+            root,
+            direction,
+            sort_field,
+            reverse,
+            self.delete_checkbox.isChecked(),
+            self.worker_spin.value(),
+            compare_mode,
+            compression_options,
+        )
 
     def build_sync_plan(self) -> None:
         if not self.client:
             return
-        root, direction, sort_field, reverse, deletion, workers = self._sync_options()
+        root, direction, sort_field, reverse, deletion, workers, compare_mode, compression_options = self._sync_options()
         if not root.is_dir():
             QMessageBox.warning(self, "本地目录无效", "请选择一个有效的同步根目录。")
             return
@@ -1047,10 +1376,16 @@ class MainWindow(QMainWindow):
         list_threads = self.list_threads_spin.value()
         self.settings.setValue("list_threads", list_threads)
         skip_oversize = bool(self.settings.value("skip_oversize", True, type=bool))
-        LOGGER.debug("生成同步计划：方向=%s，排序=%s，逆序=%s，文件客户端并发=%s，读取线程=%s，忽略=%s，跳过超限=%s", direction.value, sort_field.value, reverse, workers, list_threads, sorted(self.ignored_album_names), skip_oversize)
+        LOGGER.debug("生成同步计划：方向=%s，排序=%s，逆序=%s，文件客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s，忽略=%s，跳过超限=%s", direction.value, sort_field.value, reverse, workers, list_threads, compare_mode.value, compression_options.enabled, sorted(self.ignored_album_names), skip_oversize)
         self._run_job(
             "正在比较本地与云端",
-            lambda progress: SyncEngine(self.client, max_workers=workers, list_threads=list_threads).build_plan(
+            lambda progress: SyncEngine(
+                self.client,
+                max_workers=workers,
+                list_threads=list_threads,
+                compare_mode=compare_mode,
+                compression_options=compression_options,
+            ).build_plan(
                 root, direction, sort_field, reverse, deletion, progress, self.ignored_album_names, skip_oversize
             ),
             self._sync_plan_ready,
@@ -1308,7 +1643,7 @@ class MainWindow(QMainWindow):
         response = QMessageBox.warning(self, "确认执行同步", message, QMessageBox.Cancel | QMessageBox.Yes, QMessageBox.Cancel)
         if response != QMessageBox.Yes:
             return
-        root, _, _, _, _, workers = self._sync_options()
+        root, _, _, _, _, workers, compare_mode, compression_options = self._sync_options()
         self._current_sync_sequence = None
         self._sync_finished_sequences = {
             action.sequence
@@ -1324,11 +1659,17 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("正在执行同步计划")
         list_threads = self.list_threads_spin.value()
         self.settings.setValue("list_threads", list_threads)
-        LOGGER.debug("执行同步计划：操作数=%s，主控制器文件客户端并发=%s，读取线程=%s", len(executable), workers, list_threads)
+        LOGGER.debug("执行同步计划：操作数=%s，主控制器文件客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s", len(executable), workers, list_threads, compare_mode.value, compression_options.enabled)
 
         thread = QThread(self)
         worker = SyncWorker(
-            lambda progress, action_status, alert: SyncEngine(self.client, max_workers=workers, list_threads=list_threads).execute_plan(
+            lambda progress, action_status, alert: SyncEngine(
+                self.client,
+                max_workers=workers,
+                list_threads=list_threads,
+                compare_mode=compare_mode,
+                compression_options=compression_options,
+            ).execute_plan(
                 root,
                 self.sync_actions,
                 progress,

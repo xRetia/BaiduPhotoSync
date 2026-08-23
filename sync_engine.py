@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from local_scan_cache import CACHE_DIRECTORY_NAME, LocalScanCache
-from media_validation import free_user_size_message, validate_media_file
+from media_validation import free_user_size_message, media_kind, validate_media_file
 from file_client_worker import run_file_client
+from video_compression import VideoCompressionOptions
 from remote_client import RemoteAlbum, RemoteMedia, YikeRemoteClient
 
 
@@ -27,12 +28,20 @@ LOGGER = logging.getLogger(__name__)
 # media file. The master decides whether to create a replacement client.
 FILE_CLIENT_MAX_ATTEMPTS = 3
 FILE_CLIENT_BASE_TIMEOUT_SECONDS = 120
-FILE_CLIENT_BYTES_PER_SECOND = 256 * 1024
+# Use a deliberately pessimistic uplink estimate.  The payload is one full
+# multipart body, and real Wi-Fi / residential uplinks are often slower than
+# 256 KiB/s once background traffic and TLS framing are included.
+FILE_CLIENT_BYTES_PER_SECOND = 128 * 1024
 FILE_CLIENT_MAX_TIMEOUT_SECONDS = 2 * 60 * 60
-# The master must allow room for the per-request transport retries that happen
-# *inside* a file client before it kills the process and restarts it. Without
-# this headroom a legitimately slow large-video upload is force-killed mid-send.
-FILE_CLIENT_TIMEOUT_ATTEMPTS = 3
+# The request wrapper makes the original request plus up to three replays on a
+# rewound body.  The master must budget all four wire attempts; otherwise it
+# can terminate a healthy slow client while its final replay is still sending.
+FILE_CLIENT_TIMEOUT_ATTEMPTS = 4
+# A whole-file multipart upload competes for the same local uplink.  Running
+# several video-sized request bodies at once turns a healthy connection into
+# per-socket write timeouts, so large payloads receive an exclusive transfer
+# lane while small photos may still use the configured parallelism.
+LARGE_FILE_SERIAL_UPLOAD_BYTES = 16 * 1024 * 1024
 # The master must not submit an unbounded addfile list. A completed album is
 # associated in sequential chunks of at most 50 FSIDs; 201 files become 50, 50,
 # 50, 50, 1.
@@ -128,6 +137,14 @@ class SortField(str, Enum):
     NAME = "按文件夹名称"
     MODIFIED = "按文件夹修改日期"
     CREATED = "按文件夹创建日期"
+
+
+class FileCompareMode(str, Enum):
+    """How local media is compared with an existing target-album snapshot."""
+
+    SMART = "智能（推荐：同名视频压缩版 + 内容去重）"
+    NAME_ONLY = "仅按文件名（同名即视为已同步）"
+    CONTENT_FIRST = "内容优先（同名非视频内容不同标记冲突）"
 
 
 class PlanAction(str, Enum):
@@ -260,7 +277,14 @@ class SyncEngine:
     uploads/downloads when the third-party API exposes incomplete metadata.
     """
 
-    def __init__(self, client: YikeRemoteClient, max_workers: int = 2, list_threads: int = 4):
+    def __init__(
+        self,
+        client: YikeRemoteClient,
+        max_workers: int = 2,
+        list_threads: int = 4,
+        compare_mode: FileCompareMode = FileCompareMode.SMART,
+        compression_options: VideoCompressionOptions | None = None,
+    ):
         self.client = client
         # The master owns this pool. Each short-lived client uploads one exact
         # file; album association remains in the single master lane. The UI
@@ -269,6 +293,8 @@ class SyncEngine:
         # Snapshotting every album's media list is read-only and benefits from
         # modest parallelism; the UI exposes 1–16 threads (default 4).
         self.list_threads = max(1, min(int(list_threads), 16))
+        self.compare_mode = FileCompareMode(compare_mode)
+        self.compression_options = compression_options or VideoCompressionOptions()
 
     @staticmethod
     def _name_key(name: str) -> str:
@@ -432,8 +458,20 @@ class SyncEngine:
         def add_upload(local_file, album_name: str, remote_album_id: str | None, detail: str) -> None:
             """Add an UPLOAD action, or a SKIP when the file is over the
             free-tier size limit (when *skip_oversize* is enabled)."""
-            oversize = free_user_size_message(local_file.path, local_file.size) if skip_oversize else None
-            if oversize:
+            oversize = free_user_size_message(local_file.path, local_file.size)
+            if oversize and self.compression_options.enabled and media_kind(local_file.path) == "video":
+                add(
+                    PlanAction.UPLOAD,
+                    album_name,
+                    local_file.name,
+                    local_path=local_file.path,
+                    remote_album_id=remote_album_id,
+                    size=local_file.size,
+                    detail="视频超过普通用户 30MB 限制：将临时压缩至不超过 28MB 后以原文件名上传（本地高清原件保留）",
+                )
+                LOGGER.info("计划压缩后上传超限视频：%s/%s", album_name, local_file.name)
+                return
+            if oversize and skip_oversize:
                 add(
                     PlanAction.SKIP,
                     album_name,
@@ -540,37 +578,74 @@ class SyncEngine:
             for media_key in sorted(set(local_files) & set(remote_files)):
                 local_file = local_files[media_key]
                 remote_file = remote_files[media_key]
-                matched_local_keys.add(media_key)
-                matched_remote_keys.add(media_key)
                 if self._same_file(local_file, remote_file):
-                    LOGGER.debug("两端已有同名媒体，跳过：%s/%s", album_name, local_file.name)
+                    matched_local_keys.add(media_key)
+                    matched_remote_keys.add(media_key)
+                    LOGGER.debug("两端已有同名同内容媒体，跳过：%s/%s", album_name, local_file.name)
+                elif media_kind(local_file.path) == "video":
+                    # The user may keep a high-bitrate original locally while
+                    # a ≤30 MiB rendition with the same filename lives in the
+                    # album.  This is deliberately treated as synced in every
+                    # mode: a re-upload would only replace a valid backup.
+                    matched_local_keys.add(media_key)
+                    matched_remote_keys.add(media_key)
+                    LOGGER.info(
+                        "同名视频的云端内容与本地不同；按云端压缩替代版本视为已同步：%s/%s（本地 %s bytes，云端 %s bytes）",
+                        album_name,
+                        local_file.name,
+                        local_file.size,
+                        remote_file.size,
+                    )
+                elif self.compare_mode in {FileCompareMode.SMART, FileCompareMode.NAME_ONLY}:
+                    matched_local_keys.add(media_key)
+                    matched_remote_keys.add(media_key)
+                    LOGGER.debug("同名非视频媒体按当前对比模式视为已同步：%s/%s", album_name, local_file.name)
                 else:
-                    LOGGER.debug("两端已有同名媒体，按存在即跳过策略不列入计划：%s/%s", album_name, local_file.name)
+                    # Content-first mode makes non-video same-name divergence
+                    # explicit instead of uploading or silently accepting it.
+                    matched_local_keys.add(media_key)
+                    matched_remote_keys.add(media_key)
+                    add(
+                        PlanAction.CONFLICT,
+                        album_name,
+                        local_file.name,
+                        local_path=local_file.path,
+                        remote_album_id=remote_album.album_id,
+                        remote_fsid=remote_file.fsid,
+                        size=local_file.size,
+                        detail="同名非视频媒体的大小或 MD5 不同；内容优先模式要求人工确认",
+                    )
 
             remote_by_signature: dict[tuple[int, str], list[tuple[str, RemoteMedia]]] = {}
-            for media_key, remote_file in remote_files.items():
-                if media_key in matched_remote_keys or not remote_file.md5:
-                    continue
-                signature = (remote_file.size, remote_file.md5.lower())
-                remote_by_signature.setdefault(signature, []).append((media_key, remote_file))
+            if self.compare_mode != FileCompareMode.NAME_ONLY:
+                for media_key, remote_file in remote_files.items():
+                    if not remote_file.md5:
+                        continue
+                    signature = (remote_file.size, remote_file.md5.lower())
+                    remote_by_signature.setdefault(signature, []).append((media_key, remote_file))
 
-            remote_candidate_sizes = {signature[0] for signature in remote_by_signature}
-            for media_key, local_file in local_files.items():
-                if media_key in matched_local_keys or local_file.size not in remote_candidate_sizes:
-                    continue
-                signature = (local_file.size, local_file.md5().lower())
-                candidates = remote_by_signature.get(signature, [])
-                if not candidates:
-                    continue
-                remote_key, remote_file = candidates.pop(0)
-                matched_local_keys.add(media_key)
-                matched_remote_keys.add(remote_key)
-                LOGGER.debug(
-                    "检测到服务端自动改名但内容相同，跳过重复同步：%s/%s -> %s",
-                    album_name,
-                    local_file.name,
-                    remote_file.name,
-                )
+                remote_candidate_sizes = {signature[0] for signature in remote_by_signature}
+                for media_key, local_file in local_files.items():
+                    if media_key in matched_local_keys or local_file.size not in remote_candidate_sizes:
+                        continue
+                    signature = (local_file.size, local_file.md5().lower())
+                    candidates = remote_by_signature.get(signature, [])
+                    if not candidates:
+                        continue
+                    # Do not consume the remote candidate.  The service deduplicates
+                    # identical blobs and may expose only one target-album item for
+                    # several local copies with different names.  Consuming the
+                    # candidate makes every later alias look missing on the next
+                    # plan, even though retrying can only return the same FSID.
+                    remote_key, remote_file = candidates[0]
+                    matched_local_keys.add(media_key)
+                    matched_remote_keys.add(remote_key)
+                    LOGGER.debug(
+                        "检测到目标相册已有相同内容（含服务端自动改名或本地重复副本），跳过重复同步：%s/%s -> %s",
+                        album_name,
+                        local_file.name,
+                        remote_file.name,
+                    )
 
             for media_key in sorted(set(local_files) - matched_local_keys):
                 local_file = local_files[media_key]
@@ -977,6 +1052,18 @@ class SyncEngine:
                             break
                         continue
                     while pending and len(active) < self.max_workers and not (control and control.paused):
+                        next_action = pending[0]
+                        next_is_large = int(next_action.size or 0) >= LARGE_FILE_SERIAL_UPLOAD_BYTES
+                        large_transfer_active = any(
+                            int(state["action"].size or 0) >= LARGE_FILE_SERIAL_UPLOAD_BYTES
+                            for state in active.values()
+                        )
+                        # A large multipart upload gets the uplink to itself.
+                        # This is intentionally conservative: it prevents four
+                        # 20–30 MiB videos from starving each other's TLS socket
+                        # writes, but preserves parallelism for normal photos.
+                        if large_transfer_active or (next_is_large and active):
+                            break
                         action = pending.pop(0)
                         attempts[action.sequence] += 1
                         attempt = attempts[action.sequence]
@@ -989,7 +1076,14 @@ class SyncEngine:
                         client_queue = process_context.Queue()
                         process = process_context.Process(
                             target=run_file_client,
-                            args=(client_queue, cookie_text, album_id, album_info, str(action.local_path)),
+                            args=(
+                                client_queue,
+                                cookie_text,
+                                album_id,
+                                album_info,
+                                str(action.local_path),
+                                self.compression_options.to_worker_dict(),
+                            ),
                             name="yike-file-client-{}-{}".format(action.sequence, attempt),
                         )
                         process.start()
@@ -1026,12 +1120,14 @@ class SyncEngine:
                             except queue.Empty:
                                 break
                             if event.get("kind") == "progress":
-                                set_status(action, "当前相册第 {} 批：正在上传".format(batch_number))
+                                event_message = str(event.get("message", "正在上传"))
+                                phase = "正在压缩视频" if "压缩" in event_message else "正在上传"
+                                set_status(action, "当前相册第 {} 批：{}".format(batch_number, phase))
                                 if progress:
                                     fraction = max(0, min(100, int(event.get("value", 0)))) / 100
                                     progress(
                                         int((completed + fraction) / total * 100),
-                                        str(event.get("message", "正在上传")),
+                                        event_message,
                                     )
                             elif event.get("kind") == "result":
                                 state["result"] = event

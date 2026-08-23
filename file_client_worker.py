@@ -13,6 +13,7 @@ import traceback
 from typing import Any
 
 from remote_client import YikeRemoteClient
+from video_compression import VideoCompressionOptions, prepared_video_upload
 
 
 def run_file_client(
@@ -21,6 +22,7 @@ def run_file_client(
     album_id: str,
     album_info: dict,
     file_path: str,
+    compression_options: dict | None = None,
 ) -> None:
     """Run one payload upload and publish structured events to the master."""
     path = Path(file_path)
@@ -30,8 +32,12 @@ def run_file_client(
 
     try:
         client = YikeRemoteClient.create_file_client(cookie_text, album_id, album_info)
-        fsid = client.upload_file_payload_once(path, report)
-        result_queue.put({"kind": "result", "ok": True, "fsid": fsid, "message": f"已上传 {path.name}，等待主控制器统一加入相册"})
+        options = VideoCompressionOptions.from_worker_dict(compression_options)
+        with prepared_video_upload(path, options, report) as prepared:
+            upload_path = prepared.path if prepared is not None else path
+            fsid = client.upload_file_payload_once(upload_path, report)
+            compressed_note = "（已上传临时压缩副本，本地高清原件未修改）" if prepared is not None else ""
+        result_queue.put({"kind": "result", "ok": True, "fsid": fsid, "message": f"已上传 {path.name}{compressed_note}，等待主控制器统一加入相册"})
     except Exception as exc:  # noqa: BLE001 - master writes diagnostic detail to error.log
         result_queue.put(
             {
