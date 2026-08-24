@@ -14,7 +14,7 @@ from pathlib import Path
 import threading
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QRect, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -309,8 +309,9 @@ class MediaThumbnailDelegate(QStyledItemDelegate):
     """Render a fixed Explorer-like tile: centered image canvas and one text baseline."""
 
     THUMBNAIL_PIXMAP_ROLE = Qt.UserRole + 17
-    IMAGE_BOX = QSize(160, 160)
+    IMAGE_BOX = QSize(160, 152)
     TEXT_HEIGHT = 36
+    TILE_HEIGHT = 208
     HORIZONTAL_MARGIN = 8
 
     def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
@@ -318,11 +319,11 @@ class MediaThumbnailDelegate(QStyledItemDelegate):
         rect = option.rect.adjusted(2, 2, -2, -2)
         selected = bool(option.state & QStyle.State_Selected)
         if selected:
-            # Keep the familiar lightweight Explorer-like focus treatment:
-            # a soft tint and rounded outline instead of a full opaque tile.
-            selection_rect = rect.adjusted(5, 4, -5, -4)
+            # The validated demo uses a complete tile-sized, soft focus frame.
+            # It keeps the filename readable and avoids an opaque blue block.
+            selection_rect = rect.adjusted(4, 3, -4, -3)
             highlight = option.palette.color(QPalette.Highlight)
-            painter.setPen(highlight)
+            painter.setPen(QColor(highlight.red(), highlight.green(), highlight.blue(), 155))
             painter.setBrush(QColor(highlight.red(), highlight.green(), highlight.blue(), 34))
             painter.drawRoundedRect(selection_rect, 6, 6)
 
@@ -335,19 +336,17 @@ class MediaThumbnailDelegate(QStyledItemDelegate):
             if not pixmap.isNull():
                 pixmap = pixmap.scaled(self.IMAGE_BOX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         if not pixmap.isNull():
-            # Center every source shape inside the same image canvas.  Names
-            # remain below it on a single shared baseline.
-            image_x = rect.x() + (rect.width() - pixmap.width()) // 2
-            image_y = rect.y() + (self.IMAGE_BOX.height() - pixmap.height()) // 2
+            image_rect = QRect(rect.x(), rect.y() + 4, rect.width(), self.IMAGE_BOX.height())
+            image_x = image_rect.x() + (image_rect.width() - pixmap.width()) // 2
+            image_y = image_rect.y() + (image_rect.height() - pixmap.height()) // 2
             painter.drawPixmap(image_x, image_y, pixmap)
 
-        text_rect = rect.adjusted(
-            self.HORIZONTAL_MARGIN,
-            self.IMAGE_BOX.height() + 2,
-            -self.HORIZONTAL_MARGIN,
-            0,
+        text_rect = QRect(
+            rect.x() + self.HORIZONTAL_MARGIN,
+            rect.y() + 160,
+            max(0, rect.width() - self.HORIZONTAL_MARGIN * 2),
+            self.TEXT_HEIGHT,
         )
-        text_rect.setHeight(self.TEXT_HEIGHT)
         full_name = str(index.data(Qt.DisplayRole) or "")
         elided_name = option.fontMetrics.elidedText(full_name, Qt.ElideRight, max(0, text_rect.width()))
         painter.setPen(option.palette.color(QPalette.Text))
@@ -1748,9 +1747,10 @@ class MainWindow(QMainWindow):
             # item becomes visible in thumbnail mode.
             thumbnail = QListWidgetItem(icon, item.name)
             thumbnail.setData(Qt.UserRole, item.fsid)
-            thumbnail.setSizeHint(QSize(1, 208))
+            thumbnail.setSizeHint(self.media_thumbnails.gridSize())
             thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n滚动到可见区域时加载缩略图；双击使用缩略图预览。")
             self.media_thumbnails.addItem(thumbnail)
+        self._update_thumbnail_grid_size()
         if self.media_view_mode == "thumbnails":
             self._schedule_visible_thumbnail_load()
         else:
@@ -1791,6 +1791,8 @@ class MainWindow(QMainWindow):
         target_size = QSize(cell_width, 208)
         if self.media_thumbnails.gridSize() != target_size:
             self.media_thumbnails.setGridSize(target_size)
+        for index in range(self.media_thumbnails.count()):
+            self.media_thumbnails.item(index).setSizeHint(target_size)
 
     def eventFilter(self, watched: QObject, event) -> bool:  # type: ignore[override]
         if watched is getattr(self, "media_thumbnails", None).viewport() and event.type() in {
