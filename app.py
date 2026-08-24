@@ -442,6 +442,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(880, 520)
         self._startup_loading = startup_loading
         self._initial_login_pending = False
+        self._startup_waiting_for_albums = False
         self._startup_main_revealed = False
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
         migrate_legacy_windows_data()
@@ -942,6 +943,8 @@ class MainWindow(QMainWindow):
         media_top.addWidget(self.media_view_mode_combo)
         right_layout.addLayout(media_top)
         self.media_table = QTableWidget(0, 5)
+        self.media_table.setObjectName("mediaDetailView")
+        self.media_table.setFrameShape(QFrame.NoFrame)
         self.media_table.setHorizontalHeaderLabels(["名称", "类型", "大小", "修改时间", "状态"])
         self.media_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.media_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -953,6 +956,8 @@ class MainWindow(QMainWindow):
         for column in (1, 2, 3, 4):
             self.media_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.media_thumbnails = QListWidget()
+        self.media_thumbnails.setObjectName("mediaThumbnailView")
+        self.media_thumbnails.setFrameShape(QFrame.NoFrame)
         self.media_thumbnails.setViewMode(QListView.IconMode)
         self.media_thumbnails.setSelectionMode(QListWidget.ExtendedSelection)
         self.media_thumbnails.setResizeMode(QListView.Adjust)
@@ -1169,6 +1174,7 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { color: #98a4b5; background: #f5f7fa; border-color: #e6ebf1; }
             QLineEdit, QPlainTextEdit, QComboBox { background: white; border: 1px solid #dbe4ef; border-radius: 7px; padding: 7px; selection-background-color: #bfd9ff; }
             QTreeWidget, QTableWidget, QTextBrowser { background: white; border: 1px solid #e3e9f2; border-radius: 8px; gridline-color: #edf1f6; }
+            #mediaDetailView, #mediaThumbnailView { background: white; border: none; outline: none; }
             QHeaderView::section { background: #f7f9fc; color: #5b677a; border: none; border-bottom: 1px solid #e3e9f2; padding: 8px; font-weight: 600; }
             QProgressBar { background: #eef2f7; border: none; border-radius: 7px; text-align: center; min-height: 18px; color: #24364d; }
             QProgressBar::chunk { background: #2577d9; border-radius: 7px; }
@@ -1388,8 +1394,11 @@ class MainWindow(QMainWindow):
         self._startup_session_unavailable("未发现保存的登录会话。")
 
     def _startup_session_verified(self, client: object) -> None:
+        # Keep the splash visible while the first cloud-album enumeration
+        # populates the browser.  Showing the main window before this callback
+        # causes a second native resize/repaint flash on some Windows systems.
+        self._startup_waiting_for_albums = True
         self._connected(client)
-        self._reveal_main_after_startup()
 
     def _startup_session_unavailable(self, _error: str) -> None:
         # A stored credential that no longer has permission is cleared before
@@ -1556,13 +1565,11 @@ class MainWindow(QMainWindow):
         self._qr_login_attempts = 0
         self._qr_candidate_cookie = ""
         dialog.verification_succeeded()
-        reveal_after_dialog = self._initial_login_pending
-        if reveal_after_dialog:
+        if self._initial_login_pending:
             self._initial_login_pending = False
+            self._startup_waiting_for_albums = True
         self._connected(client)
         QTimer.singleShot(180, dialog.accept)
-        if reveal_after_dialog:
-            QTimer.singleShot(220, self._reveal_main_after_startup)
 
     def _connected(self, client: object) -> None:
         self.client = client  # type: ignore[assignment]
@@ -1589,12 +1596,9 @@ class MainWindow(QMainWindow):
             validated_cookie_text,
             enhanced_refresh=self.settings.value("enhanced_keepalive", False, type=bool),
         )
-        self.refresh_albums()
-        # This path covers a pasted Cookie during initial startup.  QR success
-        # defers its reveal until the login dialog has closed instead.
-        if self._initial_login_pending:
-            self._initial_login_pending = False
-            QTimer.singleShot(0, self._reveal_main_after_startup)
+        self.refresh_albums(
+            on_failure=self._startup_album_load_failed if self._startup_waiting_for_albums else None,
+        )
 
     def _apply_keepalive_cookie(self, cookie_text: str) -> None:
         """Persist a rotated browser session without treating refresh errors as logout."""
@@ -1672,10 +1676,15 @@ class MainWindow(QMainWindow):
         self._clear_connected_account()
         self.status.showMessage("已验证百度网页登录会话失效，并已清除本机登录信息。", 8000)
 
-    def refresh_albums(self) -> None:
+    def refresh_albums(self, on_failure: Callable[[str], None] | None = None) -> None:
         if not self.client:
             return
-        self._run_job("正在读取相册列表", lambda progress: self._list_albums(progress), self._albums_loaded)
+        self._run_job(
+            "正在读取相册列表",
+            lambda progress: self._list_albums(progress),
+            self._albums_loaded,
+            on_failure,
+        )
 
     def _list_albums(self, progress: Callable[[int, str], None]) -> list[RemoteAlbum]:
         assert self.client
@@ -1696,6 +1705,18 @@ class MainWindow(QMainWindow):
             if album.album_id == previous_id:
                 self.album_tree.setCurrentItem(item)
         self.status.showMessage(f"已加载 {len(self.albums)} 个云端相册。", 3500)
+        if self._startup_waiting_for_albums:
+            self._startup_waiting_for_albums = False
+            # Queue the handoff after tree layout has settled, so the first
+            # visible main-window frame already contains the album browser.
+            QTimer.singleShot(0, self._reveal_main_after_startup)
+
+    def _startup_album_load_failed(self, _error: str) -> None:
+        # Network failure must not leave the application permanently behind the
+        # splash.  Reveal a stable empty browser and leave the normal error state.
+        if self._startup_waiting_for_albums:
+            self._startup_waiting_for_albums = False
+            QTimer.singleShot(0, self._reveal_main_after_startup)
 
     def album_selected(self) -> None:
         items = self.album_tree.selectedItems()
