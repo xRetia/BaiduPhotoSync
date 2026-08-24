@@ -11,7 +11,6 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import threading
-import tempfile
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
@@ -62,7 +61,8 @@ from session_store import SessionStore, SessionStoreError
 from web_login import WEBENGINE_AVAILABLE, SessionKeepAlive, WebLoginDialog, WebLogoutDialog
 from sync_engine import FileCompareMode, PlanAction, SortField, SyncAction, SyncControl, SyncDirection, SyncEngine
 from video_compression import VideoCompressionError, VideoCompressionOptions, locate_ffmpeg, prepared_video_upload
-from ffmpeg_downloader import FFmpegDownloadError, ensure_windows_ffmpeg
+from ffmpeg_downloader import FFmpegDownloadError, download_directory, ensure_windows_ffmpeg
+from download_cache import DownloadCache
 
 
 class PlanTable(QTableWidget):
@@ -107,6 +107,13 @@ APP_ICON_PATH = APP_ROOT / "assets" / "yike_sync.ico"
 PHOTO_MEDIA_ICON_PATH = APP_ROOT / "assets" / "photo_media.svg"
 VIDEO_MEDIA_ICON_PATH = APP_ROOT / "assets" / "video_media.svg"
 ERROR_LOG_PATH = Path.cwd() / "error.log"
+DOWNLOAD_CACHE_DEFAULT_MIB = 1024
+MIB = 1024 * 1024
+
+
+def download_cache_directory() -> Path:
+    """Return the per-user persistent directory for reusable media downloads."""
+    return download_directory().parent / "download-cache"
 
 
 class Worker(QObject):
@@ -297,17 +304,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1400, 880)
-        # Fit the window to a small screen instead of opening larger than the
-        # display and being clipped by the desktop.
-        screen = QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            width = min(self.width(), max(880, available.width() - 8))
-            height = min(self.height(), max(520, available.height() - 8))
-            self.resize(width, height)
         self.setMinimumSize(880, 520)
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
+        self._restore_window_geometry()
+        cache_mib = int(self.settings.value("download_cache_mib", DOWNLOAD_CACHE_DEFAULT_MIB))
+        self.download_cache = DownloadCache(download_cache_directory(), cache_mib * MIB)
         self.session_store = SessionStore(self.settings)
         self.ignored_album_names = self._load_ignored_albums()
         self.client: YikeRemoteClient | None = None
@@ -362,10 +363,13 @@ class MainWindow(QMainWindow):
         hero_layout = QHBoxLayout(hero)
         hero_icon = QLabel(hero)
         hero_icon.setObjectName("heroYikeIcon")
-        hero_pixmap = QPixmap(str(APP_ICON_PATH))
+        # Ask QIcon for the closest embedded ICO frame rather than stretching
+        # a low-resolution QPixmap frame. yike_sync.ico includes the Windows
+        # application artwork used here and for the executable window icon.
+        hero_pixmap = QIcon(str(APP_ICON_PATH)).pixmap(QSize(56, 56))
         if not hero_pixmap.isNull():
-            hero_icon.setPixmap(hero_pixmap.scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        hero_icon.setFixedSize(60, 60)
+            hero_icon.setPixmap(hero_pixmap)
+        hero_icon.setFixedSize(64, 64)
         hero_icon.setAlignment(Qt.AlignCenter)
         hero_layout.addWidget(hero_icon)
         heading = QVBoxLayout()
@@ -411,6 +415,15 @@ class MainWindow(QMainWindow):
         if primary:
             button.setProperty("primary", True)
         return button
+
+    @staticmethod
+    def _scrollable_settings_page(page: QWidget, parent: QWidget) -> QScrollArea:
+        """Make every settings page vertically scrollable when content grows."""
+        scroll = QScrollArea(parent)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_advanced_dialog(self) -> None:
         dialog = QDialog(self)
@@ -462,7 +475,7 @@ class MainWindow(QMainWindow):
         self.delete_checkbox = QCheckBox("启用同步删除（危险，默认关闭）")
         sync_grid.addWidget(self.delete_checkbox, 4, 0, 1, 2)
         sync_grid.setRowStretch(5, 1)
-        pages.addWidget(sync_page)
+        pages.addWidget(self._scrollable_settings_page(sync_page, dialog))
 
         transfer_page = QWidget(dialog)
         transfer_grid = QGridLayout(transfer_page)
@@ -490,8 +503,26 @@ class MainWindow(QMainWindow):
         self.list_threads_spin.setValue(int(self.settings.value("list_threads", 8)))
         self.list_threads_spin.setToolTip("生成计划时并行读取云端相册媒体的线程数（1–16）。默认 8；如遇限流可调小。")
         transfer_grid.addWidget(self.list_threads_spin, 3, 1)
-        transfer_grid.setRowStretch(4, 1)
-        pages.addWidget(transfer_page)
+        cache_group = QGroupBox("下载缓存", transfer_page)
+        cache_layout = QGridLayout(cache_group)
+        cache_layout.addWidget(QLabel("缓存上限"), 0, 0)
+        self.download_cache_limit_spin = QSpinBox(cache_group)
+        self.download_cache_limit_spin.setRange(64, 102400)
+        self.download_cache_limit_spin.setSingleStep(128)
+        self.download_cache_limit_spin.setSuffix(" MiB")
+        self.download_cache_limit_spin.setValue(int(self.settings.value("download_cache_mib", DOWNLOAD_CACHE_DEFAULT_MIB)))
+        self.download_cache_limit_spin.setToolTip("已下载或已预览的云端文件会保存在当前 Windows 用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。")
+        cache_layout.addWidget(self.download_cache_limit_spin, 0, 1)
+        self.download_cache_usage_label = QLabel(cache_group)
+        self.download_cache_usage_label.setObjectName("muted")
+        cache_layout.addWidget(self.download_cache_usage_label, 1, 0, 1, 2)
+        clear_cache_button = QPushButton("清理下载缓存")
+        clear_cache_button.setToolTip("删除已下载和预览使用的本地缓存文件，不影响云端文件或本地同步目录。")
+        clear_cache_button.clicked.connect(self._clear_download_cache)
+        cache_layout.addWidget(clear_cache_button, 2, 0, 1, 2)
+        transfer_grid.addWidget(cache_group, 4, 0, 1, 2)
+        transfer_grid.setRowStretch(5, 1)
+        pages.addWidget(self._scrollable_settings_page(transfer_page, dialog))
 
         video_page = QWidget(dialog)
         video_layout = QVBoxLayout(video_page)
@@ -504,7 +535,7 @@ class MainWindow(QMainWindow):
         video_note.setObjectName("muted")
         video_layout.addWidget(video_note)
         video_layout.addStretch(1)
-        pages.addWidget(video_page)
+        pages.addWidget(self._scrollable_settings_page(video_page, dialog))
 
         advanced_page = QWidget(dialog)
         advanced_layout = QVBoxLayout(advanced_page)
@@ -527,7 +558,7 @@ class MainWindow(QMainWindow):
         reset_button.clicked.connect(self._reset_application)
         advanced_layout.addWidget(reset_button)
         advanced_layout.addStretch(1)
-        pages.addWidget(advanced_page)
+        pages.addWidget(self._scrollable_settings_page(advanced_page, dialog))
 
         navigation.currentRowChanged.connect(pages.setCurrentIndex)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -561,6 +592,8 @@ class MainWindow(QMainWindow):
         self.download_workers_spin.setValue(int(self.settings.value("download_client_workers", 4)))
         self.list_threads_spin.setValue(int(self.settings.value("list_threads", 8)))
         self.enhanced_keepalive_checkbox.setChecked(self.settings.value("enhanced_keepalive", False, type=bool))
+        self.download_cache_limit_spin.setValue(int(self.settings.value("download_cache_mib", DOWNLOAD_CACHE_DEFAULT_MIB)))
+        self._refresh_download_cache_usage()
 
     def _save_advanced_settings(self) -> None:
         self.settings.setValue("direction", self.direction_combo.currentData())
@@ -572,6 +605,12 @@ class MainWindow(QMainWindow):
         self.settings.setValue("list_threads", self.list_threads_spin.value())
         self.settings.setValue("debug_logging", self.debug_checkbox.isChecked())
         self.settings.setValue("enhanced_keepalive", self.enhanced_keepalive_checkbox.isChecked())
+        cache_mib = self.download_cache_limit_spin.value()
+        self.settings.setValue("download_cache_mib", cache_mib)
+        reclaimed = self.download_cache.enforce_limit(cache_mib * MIB)
+        if reclaimed:
+            LOGGER.debug("下载缓存达到上限后已自动清理 %s 字节。", reclaimed)
+        self._refresh_download_cache_usage()
         self.settings.setValue("skip_oversize", self.size_limit_checkbox.isChecked())
         self.settings.setValue("compress_oversize_videos", self.compress_video_checkbox.isChecked())
         self.settings.setValue("file_compare_mode", self.compare_mode_combo.currentData())
@@ -1025,6 +1064,37 @@ class MainWindow(QMainWindow):
             if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == ERROR_LOG_PATH:
                 handler.setLevel(logging.DEBUG if enabled else logging.ERROR)
         LOGGER.debug("调试日志已%s", "启用" if enabled else "关闭")
+
+    def _restore_window_geometry(self) -> None:
+        """Restore a saved visible window geometry or choose a safe default."""
+        saved = self.settings.value("window_geometry")
+        if saved is not None and self.restoreGeometry(saved):
+            current = self.frameGeometry()
+            if any(screen.availableGeometry().intersects(current) for screen in QApplication.screens()):
+                return
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(1400, max(880, available.width() - 8))
+            height = min(880, max(520, available.height() - 8))
+            self.resize(width, height)
+            self.move(available.center() - self.rect().center())
+        else:
+            self.resize(1400, 880)
+
+    def _refresh_download_cache_usage(self) -> None:
+        if not hasattr(self, "download_cache_usage_label"):
+            return
+        used = self.download_cache.size_bytes()
+        limit = self.download_cache.max_bytes
+        self.download_cache_usage_label.setText(
+            f"当前缓存：{self._format_size(used)} / {self._format_size(limit)}；超过上限时将自动清理最久未使用的文件。"
+        )
+
+    def _clear_download_cache(self) -> None:
+        reclaimed = self.download_cache.clear()
+        self._refresh_download_cache_usage()
+        self.status.showMessage(f"已清理下载缓存，释放 {self._format_size(reclaimed)}。", 6000)
 
     # ----- remote connection and browser ---------------------------
     def _set_enhanced_keepalive(self, enabled: bool) -> None:
@@ -1564,25 +1634,36 @@ class MainWindow(QMainWindow):
         completed = 0
         completed_lock = threading.Lock()
 
-        def download_one(item: RemoteMedia) -> str:
+        def download_one(item: RemoteMedia) -> tuple[str, bool]:
             # Download contexts are isolated for the same reason as uploads:
-            # each client owns its own mutable remote item objects.
+            # each client owns its own mutable remote item objects. The cache
+            # locks only the matching media entry, so different files remain
+            # eligible for the configured multi-client parallelism.
             worker_client = master_client.create_isolated_album_client(album_id)
-            worker_client.download_media(album_id, item.fsid, directory)
-            return item.name
+            cached = self.download_cache.get_or_download(
+                album_id,
+                item.fsid,
+                item.size,
+                lambda cache_directory: worker_client.download_media(album_id, item.fsid, cache_directory),
+            )
+            destination = directory / cached.path.name
+            if destination != cached.path:
+                shutil.copy2(cached.path, destination)
+            return item.name, cached.hit
 
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="manual-download") as pool:
             futures = {pool.submit(download_one, item): item for item in selected}
             for future in as_completed(futures):
                 item = futures[future]
                 try:
-                    completed_name = future.result()
+                    completed_name, cache_hit = future.result()
                 except Exception as exc:  # noqa: BLE001 - summarized after other clients finish
                     raise RemoteClientError(f"下载失败：{item.name}：{exc}") from exc
                 with completed_lock:
                     completed += 1
                     current = completed
-                progress(int(current / total * 100), f"已下载 {completed_name}（{current}/{total}，并发 {workers}）")
+                cache_note = "缓存命中" if cache_hit else "已缓存"
+                progress(int(current / total * 100), f"已下载 {completed_name}（{cache_note}，{current}/{total}，并发 {workers}）")
         progress(100, "下载完成")
 
     @staticmethod
@@ -1615,13 +1696,12 @@ class MainWindow(QMainWindow):
             self.status.showMessage("正在准备当前照片预览，请稍候。", 4000)
             return
         self._discard_preview_cache()
-        self._preview_directory = Path(tempfile.mkdtemp(prefix="BaiduPhotoSync-preview-"))
         self._preview_pending = True
         self.media_preview.setEnabled(False)
         album_id = self.current_album.album_id
         self._run_job(
             "正在下载预览照片",
-            lambda progress: self._download_preview_photo(album_id, item, self._preview_directory, progress),
+            lambda progress: self._download_preview_photo(album_id, item, progress),
             self._preview_photo_downloaded,
             self._preview_photo_download_failed,
         )
@@ -1630,17 +1710,19 @@ class MainWindow(QMainWindow):
         self,
         album_id: str,
         item: RemoteMedia,
-        target_directory: Path | None,
         progress: Callable[[int, str], None],
     ) -> Path:
         assert self.client
-        if target_directory is None:
-            raise RemoteClientError("预览临时目录不可用。")
-        progress(10, f"正在下载预览：{item.name}")
+        progress(10, f"正在准备预览：{item.name}")
         client = self.client.create_isolated_album_client(album_id)
-        output = client.download_media(album_id, item.fsid, target_directory)
-        progress(100, f"预览文件已准备：{item.name}")
-        return output
+        cached = self.download_cache.get_or_download(
+            album_id,
+            item.fsid,
+            item.size,
+            lambda cache_directory: client.download_media(album_id, item.fsid, cache_directory),
+        )
+        progress(100, f"预览文件已准备：{item.name}（{'缓存命中' if cached.hit else '已缓存'}）")
+        return cached.path
 
     def _preview_photo_downloaded(self, output: object) -> None:
         self._preview_pending = False
@@ -1673,9 +1755,7 @@ class MainWindow(QMainWindow):
             self._preview_dialog = None
             dialog.close()
             dialog.deleteLater()
-        if self._preview_directory is not None:
-            shutil.rmtree(self._preview_directory, ignore_errors=True)
-            self._preview_directory = None
+        self._preview_directory = None
 
     def delete_media(self) -> None:
         if not self.client or not self.current_album:
@@ -2236,6 +2316,8 @@ class MainWindow(QMainWindow):
         self.session_keepalive.stop()
         self.client = None  # Drop the in-memory Cookie reference.
         self._pending_cookie_text = ""
+        self.settings.setValue("window_geometry", self.saveGeometry())
+        self.settings.sync()
         super().closeEvent(event)
 
 
