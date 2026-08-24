@@ -38,7 +38,7 @@ REQUIRED_LOGIN_COOKIES = {"BAIDUID", "BDUSS"}
 # BDUSS that the QR page sets the moment a code is scanned.
 CONFIRMED_LOGIN_COOKIES = {"STOKEN", "PTOKEN", "PANWEB", "PANWEB.sig"}
 AUTHENTICATION_COOKIE = "BDUSS"
-SESSION_KEEPALIVE_INTERVAL_MS = 60_000
+ENHANCED_KEEPALIVE_INTERVAL_MS = 180_000
 
 
 def _cookie_text(cookie: QNetworkCookie) -> tuple[str, str]:
@@ -143,9 +143,10 @@ class SessionKeepAlive(QObject):
         self._view = None
         self._cookies: dict[tuple[str, str, str], QNetworkCookie] = {}
         self._timer = QTimer(self)
-        self._timer.setInterval(SESSION_KEEPALIVE_INTERVAL_MS)
+        self._timer.setInterval(ENHANCED_KEEPALIVE_INTERVAL_MS)
         self._timer.timeout.connect(self.refresh_now)
         self._active = False
+        self._enhanced_refresh_enabled = False
         self._refresh_in_flight = False
         self._last_emitted_cookie_text = ""
 
@@ -153,24 +154,55 @@ class SessionKeepAlive(QObject):
     def active(self) -> bool:
         return self._active
 
-    def start(self, cookie_text: str) -> None:
-        """Seed a fresh private profile and begin minute-level homepage refreshes."""
+    def start(self, cookie_text: str, *, enhanced_refresh: bool = False) -> None:
+        """Seed a private session page and optionally enable periodic reloads.
+
+        The hidden page is loaded once so its own JavaScript can maintain the
+        browser session. Periodic page reloads are deliberately opt-in because
+        they can create unnecessary requests on stable sessions.
+        """
         self.stop()
         if not WEBENGINE_AVAILABLE or not cookie_text.strip():
             return
         self._active = True
+        self._enhanced_refresh_enabled = bool(enhanced_refresh)
         self._create_view()
         self._seed_cookies(cookie_text)
-        self._timer.start()
-        LOGGER.debug("会话保活已启动：将每 60 秒访问 %s", KEEPALIVE_URL.toString())
         # Cookie insertion into QWebEngineCookieStore is asynchronous.
-        QTimer.singleShot(700, self.refresh_now)
+        QTimer.singleShot(700, self._load_initial_page)
+        self.set_enhanced_refresh(self._enhanced_refresh_enabled)
+        LOGGER.debug(
+            "会话保活已启动：隐藏页面=%s，增强定时刷新=%s",
+            KEEPALIVE_URL.toString(),
+            "启用（每 3 分钟）" if self._enhanced_refresh_enabled else "关闭",
+        )
+
+    def set_enhanced_refresh(self, enabled: bool) -> None:
+        """Apply the user-selected three-minute periodic refresh policy."""
+        self._enhanced_refresh_enabled = bool(enabled)
+        self._timer.stop()
+        if not self._active:
+            return
+        if self._enhanced_refresh_enabled:
+            self._timer.setInterval(ENHANCED_KEEPALIVE_INTERVAL_MS)
+            self._timer.start()
+            LOGGER.debug("账号增强防掉线已启用：每 3 分钟刷新隐藏页面。")
+        else:
+            LOGGER.debug("账号增强防掉线已关闭：隐藏页面仅由自身 JavaScript 维持会话。")
+
+    def _load_initial_page(self) -> None:
+        if not self._active or self._view is None:
+            return
+        LOGGER.debug("会话保活正在加载隐藏页面 %s", KEEPALIVE_URL.toString())
+        self._refresh_in_flight = True
+        self._view.setUrl(KEEPALIVE_URL)
 
     def stop(self) -> None:
         """Stop refreshes and destroy the private profile with its in-memory cookies."""
         if self._active:
             LOGGER.debug("会话保活已停止。")
         self._active = False
+        self._enhanced_refresh_enabled = False
         self._refresh_in_flight = False
         self._timer.stop()
         self._cookies.clear()
@@ -187,7 +219,7 @@ class SessionKeepAlive(QObject):
         if not self._active or self._view is None or self._refresh_in_flight:
             return
         self._refresh_in_flight = True
-        LOGGER.debug("会话保活正在访问 %s", KEEPALIVE_URL.toString())
+        LOGGER.debug("账号增强防掉线正在刷新隐藏页面 %s", KEEPALIVE_URL.toString())
         self._view.setUrl(KEEPALIVE_URL)
 
     def _create_view(self) -> None:

@@ -280,8 +280,9 @@ class SyncEngine:
     def __init__(
         self,
         client: YikeRemoteClient,
-        max_workers: int = 2,
-        list_threads: int = 4,
+        max_workers: int = 4,
+        download_workers: int = 4,
+        list_threads: int = 8,
         compare_mode: FileCompareMode = FileCompareMode.SMART,
         compression_options: VideoCompressionOptions | None = None,
     ):
@@ -290,8 +291,11 @@ class SyncEngine:
         # file; album association remains in the single master lane. The UI
         # permits up to ten clients for controlled throughput validation.
         self.max_workers = max(1, min(int(max_workers), 10))
+        # Downloads use independent remote client contexts so they can progress
+        # without sharing mutable item objects with the master or one another.
+        self.download_workers = max(1, min(int(download_workers), 10))
         # Snapshotting every album's media list is read-only and benefits from
-        # modest parallelism; the UI exposes 1–16 threads (default 4).
+        # modest parallelism; the UI exposes 1–16 threads (default 8).
         self.list_threads = max(1, min(int(list_threads), 16))
         self.compare_mode = FileCompareMode(compare_mode)
         self.compression_options = compression_options or VideoCompressionOptions()
@@ -1286,7 +1290,53 @@ class SyncEngine:
         # Downloads/deletes are dispatched by the master after all upload file
         # clients finish; an error is recorded but does not erase the remaining
         # independently planned operations.
-        for action in trailing_actions:
+        # Downloading is read-only against the remote account and each worker
+        # owns an isolated client, so the transfer phase can use user-selected
+        # concurrency after folder setup and uploads are complete. Destructive
+        # operations remain in the serial master lane below.
+        download_actions = [action for action in trailing_actions if action.action == PlanAction.DOWNLOAD]
+        serial_trailing_actions = [action for action in trailing_actions if action.action != PlanAction.DOWNLOAD]
+
+        def run_download_action(action: SyncAction) -> SyncAction:
+            if not wait_for_control(action):
+                return action
+            album_id = action.remote_album_id or remote_ids.get(action.album_name)
+            if not album_id or not action.remote_fsid:
+                set_status(action, "失败：同步计划缺少下载来源。")
+                return action
+            attempts = 0
+            while True:
+                try:
+                    set_status(action, "正在下载")
+                    worker_client = self.client.create_isolated_album_client(album_id)
+                    worker_client.download_media(album_id, action.remote_fsid, root / action.album_name)
+                    set_status(action, "已完成")
+                    return action
+                except Exception as exc:  # noqa: BLE001 - isolated task result is reported in the plan
+                    error_text = str(exc)
+                    if _is_rate_limit_error(error_text) and attempts < RATE_LIMIT_MAX_RETRIES:
+                        wait_seconds = min(
+                            RATE_LIMIT_BASE_WAIT_SECONDS * (2 ** attempts),
+                            RATE_LIMIT_MAX_WAIT_SECONDS,
+                        )
+                        attempts += 1
+                        set_status(action, f"操作过于频繁，等待 {wait_seconds} 秒后重试（第 {attempts} 次）")
+                        if _wait_with_control(wait_seconds, control):
+                            continue
+                        set_status(action, "已停止")
+                        return action
+                    LOGGER.exception("并发下载失败：%s/%s", action.album_name, action.media_name)
+                    set_status(action, f"失败：{_friendly_error(error_text)}")
+                    return action
+
+        if download_actions and not (control and control.stopped):
+            LOGGER.debug("并发下载 %s 个同步文件（%s 客户端）", len(download_actions), self.download_workers)
+            with ThreadPoolExecutor(max_workers=self.download_workers, thread_name_prefix="sync-download") as pool:
+                futures = {pool.submit(run_download_action, action): action for action in download_actions}
+                for future in as_completed(futures):
+                    report(future.result())
+
+        for action in serial_trailing_actions:
             if control and control.stopped:
                 break
             run_action(action)

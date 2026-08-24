@@ -8,7 +8,9 @@ import shutil
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import threading
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
@@ -233,7 +235,7 @@ class CookieDialog(QDialog):
         guide.setHtml(
             """
             <p>粘贴已登录浏览器导出的 <code>photo.baidu.com</code> 与 <code>.baidu.com</code> Cookie 表格行或 JSON。Cookie 是登录凭据，请只在自己的受信任设备上使用，且不要发送给任何人。</p>
-            <p>连接成功后，保活功能会在应用运行期间使用隐藏 WebView 携带成功登录的 Cookie，每分钟访问 <code>https://photo.baidu.com/photo/web/home</code>，并在 DEBUG 日志中记录启动、访问、刷新及停止状态。</p>
+            <p>连接成功后，隐藏 WebView 会携带成功登录的 Cookie 并保持页面会话；默认不定时刷新。可在“高级设置 → 高级”启用“账号增强防掉线”，使其每 3 分钟访问 <code>https://photo.baidu.com/photo/web/home</code> 一次。相关状态会写入 DEBUG 日志。</p>
             <p>Cookie 内容不会写入日志。保存成功的会话会受到当前 Windows 用户的 DPAPI 保护。</p>
             """
         )
@@ -431,16 +433,22 @@ class MainWindow(QMainWindow):
         transfer_grid.addWidget(QLabel("文件上传并发"), 1, 0)
         self.worker_spin = QSpinBox(transfer_page)
         self.worker_spin.setRange(1, 10)
-        self.worker_spin.setValue(int(self.settings.value("file_client_workers", 2)))
-        self.worker_spin.setToolTip("主控制器同时下发的单文件客户端数（1–10）。大于等于 16MB 的传输会自动独占上行链路，避免多路大视频写超时。")
+        self.worker_spin.setValue(int(self.settings.value("file_client_workers", 4)))
+        self.worker_spin.setToolTip("同步和手动上传可同时使用的单文件客户端数（1–10）。大于等于 16MB 的上传会自动独占上行链路。")
         transfer_grid.addWidget(self.worker_spin, 1, 1)
-        transfer_grid.addWidget(QLabel("读取相册列表线程数"), 2, 0)
+        transfer_grid.addWidget(QLabel("文件下载并发"), 2, 0)
+        self.download_workers_spin = QSpinBox(transfer_page)
+        self.download_workers_spin.setRange(1, 10)
+        self.download_workers_spin.setValue(int(self.settings.value("download_client_workers", 4)))
+        self.download_workers_spin.setToolTip("手动下载和同步下载可同时使用的独立客户端数（1–10）。遇到限流可调小。")
+        transfer_grid.addWidget(self.download_workers_spin, 2, 1)
+        transfer_grid.addWidget(QLabel("相册读取并发"), 3, 0)
         self.list_threads_spin = QSpinBox(transfer_page)
         self.list_threads_spin.setRange(1, 16)
-        self.list_threads_spin.setValue(int(self.settings.value("list_threads", 4)))
-        self.list_threads_spin.setToolTip("生成计划时并行读取云端相册列表的线程数（1–16）。默认 4；如遇限流可调小。")
-        transfer_grid.addWidget(self.list_threads_spin, 2, 1)
-        transfer_grid.setRowStretch(3, 1)
+        self.list_threads_spin.setValue(int(self.settings.value("list_threads", 8)))
+        self.list_threads_spin.setToolTip("生成计划时并行读取云端相册媒体的线程数（1–16）。默认 8；如遇限流可调小。")
+        transfer_grid.addWidget(self.list_threads_spin, 3, 1)
+        transfer_grid.setRowStretch(4, 1)
         pages.addWidget(transfer_page)
 
         video_page = QWidget(dialog)
@@ -462,6 +470,11 @@ class MainWindow(QMainWindow):
         self.debug_checkbox.setChecked(self.settings.value("debug_logging", True, type=bool))
         self.debug_checkbox.toggled.connect(self._set_debug_logging)
         advanced_layout.addWidget(self.debug_checkbox)
+        self.enhanced_keepalive_checkbox = QCheckBox("账号增强防掉线")
+        self.enhanced_keepalive_checkbox.setChecked(self.settings.value("enhanced_keepalive", False, type=bool))
+        self.enhanced_keepalive_checkbox.setToolTip("启用后每 3 分钟刷新一次隐藏 WebView；默认关闭，由网页自身 JavaScript 维持会话。")
+        self.enhanced_keepalive_checkbox.toggled.connect(self._set_enhanced_keepalive)
+        advanced_layout.addWidget(self.enhanced_keepalive_checkbox)
         ignored_hint = QLabel("提示：在同步中心左侧相册列表上点击右键，可将相册加入或移出忽略列表。")
         ignored_hint.setWordWrap(True)
         ignored_hint.setObjectName("muted")
@@ -502,8 +515,10 @@ class MainWindow(QMainWindow):
         self.compare_mode_combo.setCurrentIndex(
             self.compare_mode_combo.findData(str(self.settings.value("file_compare_mode", FileCompareMode.SMART.value)))
         )
-        self.worker_spin.setValue(int(self.settings.value("file_client_workers", 2)))
-        self.list_threads_spin.setValue(int(self.settings.value("list_threads", 4)))
+        self.worker_spin.setValue(int(self.settings.value("file_client_workers", 4)))
+        self.download_workers_spin.setValue(int(self.settings.value("download_client_workers", 4)))
+        self.list_threads_spin.setValue(int(self.settings.value("list_threads", 8)))
+        self.enhanced_keepalive_checkbox.setChecked(self.settings.value("enhanced_keepalive", False, type=bool))
 
     def _save_advanced_settings(self) -> None:
         self.settings.setValue("direction", self.direction_combo.currentData())
@@ -511,8 +526,10 @@ class MainWindow(QMainWindow):
         self.settings.setValue("reverse", bool(self.order_combo.currentData()))
         self.settings.setValue("deletion", self.delete_checkbox.isChecked())
         self.settings.setValue("file_client_workers", self.worker_spin.value())
+        self.settings.setValue("download_client_workers", self.download_workers_spin.value())
         self.settings.setValue("list_threads", self.list_threads_spin.value())
         self.settings.setValue("debug_logging", self.debug_checkbox.isChecked())
+        self.settings.setValue("enhanced_keepalive", self.enhanced_keepalive_checkbox.isChecked())
         self.settings.setValue("skip_oversize", self.size_limit_checkbox.isChecked())
         self.settings.setValue("compress_oversize_videos", self.compress_video_checkbox.isChecked())
         self.settings.setValue("file_compare_mode", self.compare_mode_combo.currentData())
@@ -965,6 +982,11 @@ class MainWindow(QMainWindow):
         LOGGER.debug("调试日志已%s", "启用" if enabled else "关闭")
 
     # ----- remote connection and browser ---------------------------
+    def _set_enhanced_keepalive(self, enabled: bool) -> None:
+        self.settings.setValue("enhanced_keepalive", enabled)
+        if self.session_keepalive.active:
+            self.session_keepalive.set_enhanced_refresh(enabled)
+
     def _set_connected(self, connected: bool) -> None:
         # The login button itself carries the connection state, so there is no
         # separate "connected" badge duplicating the information.
@@ -1195,7 +1217,10 @@ class MainWindow(QMainWindow):
         # Keep the authenticated website session alive only while this desktop
         # application is running. The private profile is destroyed on logout,
         # reset, and normal application shutdown.
-        self.session_keepalive.start(validated_cookie_text)
+        self.session_keepalive.start(
+            validated_cookie_text,
+            enhanced_refresh=self.settings.value("enhanced_keepalive", False, type=bool),
+        )
         self.refresh_albums()
 
     def _apply_keepalive_cookie(self, cookie_text: str) -> None:
@@ -1256,11 +1281,17 @@ class MainWindow(QMainWindow):
         self.session_keepalive.stop()
         dialog = WebLogoutDialog(current_cookie_text, self)
         if dialog.exec() != QDialog.Accepted:
-            self.session_keepalive.start(current_cookie_text)
+            self.session_keepalive.start(
+                current_cookie_text,
+                enhanced_refresh=self.settings.value("enhanced_keepalive", False, type=bool),
+            )
             self.status.showMessage("未检测到网页退出完成，本机登录会话仍保留。", 6000)
             return
         if not dialog.logout_verified():
-            self.session_keepalive.start(current_cookie_text)
+            self.session_keepalive.start(
+                current_cookie_text,
+                enhanced_refresh=self.settings.value("enhanced_keepalive", False, type=bool),
+            )
             self.status.showMessage("网页退出状态无法确认，本机登录会话仍保留。", 6000)
             return
         self._clear_connected_account()
@@ -1426,18 +1457,45 @@ class MainWindow(QMainWindow):
 
     def _upload_media(self, album_id: str, files: list[Path], progress: Callable[[int, str], None]) -> None:
         assert self.client
+        master_client = self.client
         compression_options = VideoCompressionOptions(
             enabled=bool(self.settings.value("compress_oversize_videos", False, type=bool))
         )
+        workers = max(1, self.worker_spin.value())
         total = max(1, len(files))
-        for index, source in enumerate(files, start=1):
-            def local_progress(value: int, message: str) -> None:
-                fraction = max(0, min(100, value)) / 100
-                progress(int(((index - 1) + fraction) / total * 100), message)
+        completed = 0
+        completed_lock = threading.Lock()
 
-            with prepared_video_upload(source, compression_options, local_progress) as prepared:
+        def upload_one(source: Path) -> tuple[str, str]:
+            # Each task uses an isolated request client so concurrent payload
+            # uploads do not share mutable transport or album objects. Album
+            # association remains in the master lane after all payloads finish.
+            worker_client = master_client.create_isolated_album_client(album_id)
+            with prepared_video_upload(source, compression_options) as prepared:
                 upload_path = prepared.path if prepared is not None else source
-                self.client.upload_files(album_id, [upload_path], local_progress)
+                return source.name, worker_client.upload_file_payload_once(upload_path)
+
+        uploaded_fsids: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="manual-upload") as pool:
+            futures = {pool.submit(upload_one, source): source for source in files}
+            for future in as_completed(futures):
+                source = futures[future]
+                try:
+                    completed_name, fsid = future.result()
+                except Exception as exc:  # noqa: BLE001 - summarized after other clients finish
+                    raise RemoteClientError(f"上传失败：{source.name}：{exc}") from exc
+                uploaded_fsids[completed_name] = fsid
+                with completed_lock:
+                    completed += 1
+                    current = completed
+                progress(int(current / total * 85), f"已上传 {completed_name}（{current}/{total}，并发 {workers}）")
+
+        progress(90, f"正在将 {len(uploaded_fsids)} 个文件统一加入相册")
+        confirmed = master_client.associate_uploaded_fsids_once(album_id, list(uploaded_fsids.values()))
+        missing = [name for name, fsid in uploaded_fsids.items() if fsid not in confirmed]
+        if missing:
+            raise RemoteClientError("以下文件未被服务端确认加入相册：" + "、".join(missing))
+        progress(100, f"已上传并确认入册 {len(uploaded_fsids)} 个文件（并发 {workers}）")
 
     def download_media(self) -> None:
         if not self.client or not self.current_album:
@@ -1454,9 +1512,31 @@ class MainWindow(QMainWindow):
 
     def _download_media(self, album_id: str, selected: list[RemoteMedia], directory: Path, progress: Callable[[int, str], None]) -> None:
         assert self.client
-        for index, item in enumerate(selected, start=1):
-            progress(int((index - 1) / max(1, len(selected)) * 100), f"正在下载 {item.name}")
-            self.client.download_media(album_id, item.fsid, directory)
+        master_client = self.client
+        workers = max(1, self.download_workers_spin.value())
+        total = max(1, len(selected))
+        completed = 0
+        completed_lock = threading.Lock()
+
+        def download_one(item: RemoteMedia) -> str:
+            # Download contexts are isolated for the same reason as uploads:
+            # each client owns its own mutable remote item objects.
+            worker_client = master_client.create_isolated_album_client(album_id)
+            worker_client.download_media(album_id, item.fsid, directory)
+            return item.name
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="manual-download") as pool:
+            futures = {pool.submit(download_one, item): item for item in selected}
+            for future in as_completed(futures):
+                item = futures[future]
+                try:
+                    completed_name = future.result()
+                except Exception as exc:  # noqa: BLE001 - summarized after other clients finish
+                    raise RemoteClientError(f"下载失败：{item.name}：{exc}") from exc
+                with completed_lock:
+                    completed += 1
+                    current = completed
+                progress(int(current / total * 100), f"已下载 {completed_name}（{current}/{total}，并发 {workers}）")
         progress(100, "下载完成")
 
     def delete_media(self) -> None:
@@ -1500,7 +1580,7 @@ class MainWindow(QMainWindow):
             self.local_root.setText(directory)
             self.settings.setValue("local_root", directory)
 
-    def _sync_options(self) -> tuple[Path, SyncDirection, SortField, bool, bool, int, FileCompareMode, VideoCompressionOptions]:
+    def _sync_options(self) -> tuple[Path, SyncDirection, SortField, bool, bool, int, int, FileCompareMode, VideoCompressionOptions]:
         root = Path(self.local_root.text().strip())
         # QComboBox returns a plain string for str-based Enum values on some
         # PySide6/Windows builds, so restore the Enum explicitly here.
@@ -1516,6 +1596,7 @@ class MainWindow(QMainWindow):
             reverse,
             self.delete_checkbox.isChecked(),
             self.worker_spin.value(),
+            self.download_workers_spin.value(),
             compare_mode,
             compression_options,
         )
@@ -1526,16 +1607,17 @@ class MainWindow(QMainWindow):
         if self._sync_mode != "idle":
             # 比较或执行正在进行，忽略重复点击，避免并发生成计划导致数据竞争。
             return
-        root, direction, sort_field, reverse, deletion, workers, compare_mode, compression_options = self._sync_options()
+        root, direction, sort_field, reverse, deletion, upload_workers, download_workers, compare_mode, compression_options = self._sync_options()
         if not root.is_dir():
             QMessageBox.warning(self, "本地目录无效", "请选择一个有效的同步根目录。")
             return
         self.settings.setValue("local_root", str(root))
-        self.settings.setValue("file_client_workers", workers)
+        self.settings.setValue("file_client_workers", upload_workers)
+        self.settings.setValue("download_client_workers", download_workers)
         list_threads = self.list_threads_spin.value()
         self.settings.setValue("list_threads", list_threads)
         skip_oversize = bool(self.settings.value("skip_oversize", True, type=bool))
-        LOGGER.debug("生成同步计划：方向=%s，排序=%s，逆序=%s，文件客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s，忽略=%s，跳过超限=%s", direction.value, sort_field.value, reverse, workers, list_threads, compare_mode.value, compression_options.enabled, sorted(self.ignored_album_names), skip_oversize)
+        LOGGER.debug("生成同步计划：方向=%s，排序=%s，逆序=%s，上传并发=%s，下载并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s，忽略=%s，跳过超限=%s", direction.value, sort_field.value, reverse, upload_workers, download_workers, list_threads, compare_mode.value, compression_options.enabled, sorted(self.ignored_album_names), skip_oversize)
         self._set_sync_controls("planning")
         self.progress.setValue(0)
         self.progress.setFormat("正在比较本地与云端")
@@ -1543,7 +1625,8 @@ class MainWindow(QMainWindow):
             "正在比较本地与云端",
             lambda progress: SyncEngine(
                 self.client,
-                max_workers=workers,
+                max_workers=upload_workers,
+                download_workers=download_workers,
                 list_threads=list_threads,
                 compare_mode=compare_mode,
                 compression_options=compression_options,
@@ -1812,7 +1895,7 @@ class MainWindow(QMainWindow):
         response = QMessageBox.warning(self, "确认执行同步", message, QMessageBox.Cancel | QMessageBox.Yes, QMessageBox.Cancel)
         if response != QMessageBox.Yes:
             return
-        root, _, _, _, _, workers, compare_mode, compression_options = self._sync_options()
+        root, _, _, _, _, upload_workers, download_workers, compare_mode, compression_options = self._sync_options()
         self._current_sync_sequence = None
         self._sync_finished_sequences = {
             action.sequence
@@ -1828,13 +1911,14 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("正在执行同步计划")
         list_threads = self.list_threads_spin.value()
         self.settings.setValue("list_threads", list_threads)
-        LOGGER.debug("执行同步计划：操作数=%s，主控制器文件客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s", len(executable), workers, list_threads, compare_mode.value, compression_options.enabled)
+        LOGGER.debug("执行同步计划：操作数=%s，上传客户端并发=%s，下载客户端并发=%s，读取线程=%s，比较模式=%s，超限视频压缩=%s", len(executable), upload_workers, download_workers, list_threads, compare_mode.value, compression_options.enabled)
 
         thread = QThread(self)
         worker = SyncWorker(
             lambda progress, action_status, alert: SyncEngine(
                 self.client,
-                max_workers=workers,
+                max_workers=upload_workers,
+                download_workers=download_workers,
                 list_threads=list_threads,
                 compare_mode=compare_mode,
                 compression_options=compression_options,
