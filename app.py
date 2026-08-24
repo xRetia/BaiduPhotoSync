@@ -15,7 +15,7 @@ import threading
 from typing import Callable
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -44,9 +44,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QStackedWidget,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
+    QStyledItemDelegate,
     QStyle,
     QTabWidget,
     QTableWidget,
@@ -279,6 +280,69 @@ class CookieDialog(QDialog):
 
     def should_remember_cookie(self) -> bool:
         return self.remember_cookie.isChecked()
+
+
+class ElidedLabel(QLabel):
+    """A QLabel that retains the full text in its tooltip while eliding on resize."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        self._full_text = ""
+        super().__init__(parent)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = str(text)
+        self.setToolTip(self._full_text)
+        self._refresh_elision()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._refresh_elision()
+
+    def _refresh_elision(self) -> None:
+        available = max(0, self.contentsRect().width())
+        display = QFontMetrics(self.font()).elidedText(self._full_text, Qt.ElideRight, available)
+        super().setText(display)
+
+
+class MediaThumbnailDelegate(QStyledItemDelegate):
+    """Render a fixed Explorer-like tile: centered image canvas and one text baseline."""
+
+    IMAGE_BOX = QSize(160, 160)
+    TEXT_HEIGHT = 36
+    HORIZONTAL_MARGIN = 8
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        painter.save()
+        rect = option.rect.adjusted(2, 2, -2, -2)
+        selected = bool(option.state & QStyle.State_Selected)
+        if selected:
+            painter.fillRect(rect, option.palette.highlight())
+
+        icon = index.data(Qt.DecorationRole)
+        if isinstance(icon, QIcon) and not icon.isNull():
+            pixmap = icon.pixmap(self.IMAGE_BOX)
+            if not pixmap.isNull():
+                if pixmap.size().width() > self.IMAGE_BOX.width() or pixmap.size().height() > self.IMAGE_BOX.height():
+                    pixmap = pixmap.scaled(self.IMAGE_BOX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                image_x = rect.x() + (rect.width() - pixmap.width()) // 2
+                image_y = rect.y() + max(0, (self.IMAGE_BOX.height() - pixmap.height()) // 2)
+                painter.drawPixmap(image_x, image_y, pixmap)
+
+        text_rect = rect.adjusted(
+            self.HORIZONTAL_MARGIN,
+            self.IMAGE_BOX.height() + 2,
+            -self.HORIZONTAL_MARGIN,
+            0,
+        )
+        text_rect.setHeight(self.TEXT_HEIGHT)
+        full_name = str(index.data(Qt.DisplayRole) or "")
+        elided_name = option.fontMetrics.elidedText(full_name, Qt.ElideRight, max(0, text_rect.width()))
+        painter.setPen(
+            option.palette.color(QPalette.HighlightedText if selected else QPalette.Text)
+        )
+        painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextSingleLine, elided_name)
+        painter.restore()
 
 
 class StartupLoadingWindow(QFrame):
@@ -833,17 +897,17 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(14, 14, 14, 14)
         media_top = QHBoxLayout()
-        self.media_title = QLabel("选择一个相册以浏览媒体")
+        self.media_title = ElidedLabel("选择一个相册以浏览媒体")
         self.media_title.setObjectName("paneTitle")
-        media_top.addWidget(self.media_title)
-        media_top.addStretch()
+        self.media_title.setMinimumWidth(0)
+        self.media_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        media_top.addWidget(self.media_title, 1)
         self.media_upload = self._button("上传", self.upload_media, True, QStyle.SP_ArrowUp)
         self.media_download = self._button("下载", self.download_media, icon=QStyle.SP_ArrowDown)
         self.media_preview = self._button("预览", self.preview_media, icon=QStyle.SP_FileDialogContentsView)
         self.media_preview.setToolTip("使用云端缩略图并由系统默认查看器打开选中的照片；“下载”仍会保存原图。")
         self.media_delete = self._button("删除", self.delete_media, icon=QStyle.SP_TrashIcon)
-        self.media_rename = self._button("重命名（受限）", self.rename_media, icon=QStyle.SP_FileDialogDetailedView)
-        for button in (self.media_upload, self.media_download, self.media_preview, self.media_delete, self.media_rename):
+        for button in (self.media_upload, self.media_download, self.media_preview, self.media_delete):
             media_top.addWidget(button)
         self.media_view_mode = str(self.settings.value("media_browser_view_mode", "details"))
         if self.media_view_mode not in {"details", "thumbnails"}:
@@ -862,6 +926,7 @@ class MainWindow(QMainWindow):
         self.media_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.media_table.verticalHeader().setVisible(False)
         self.media_table.cellDoubleClicked.connect(self._preview_media_from_row)
+        self.media_table.itemSelectionChanged.connect(self._update_media_selection_name)
         self.media_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for column in (1, 2, 3, 4):
             self.media_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
@@ -870,11 +935,15 @@ class MainWindow(QMainWindow):
         self.media_thumbnails.setSelectionMode(QListWidget.ExtendedSelection)
         self.media_thumbnails.setResizeMode(QListView.Adjust)
         self.media_thumbnails.setMovement(QListView.Static)
-        self.media_thumbnails.setWordWrap(True)
-        self.media_thumbnails.setIconSize(QSize(148, 148))
-        self.media_thumbnails.setGridSize(QSize(176, 205))
-        self.media_thumbnails.setSpacing(8)
+        self.media_thumbnails.setWordWrap(False)
+        self.media_thumbnails.setTextElideMode(Qt.ElideRight)
+        self.media_thumbnails.setUniformItemSizes(True)
+        self.media_thumbnails.setIconSize(MediaThumbnailDelegate.IMAGE_BOX)
+        self.media_thumbnails.setGridSize(QSize(196, 208))
+        self.media_thumbnails.setSpacing(10)
+        self.media_thumbnails.setItemDelegate(MediaThumbnailDelegate(self.media_thumbnails))
         self.media_thumbnails.itemDoubleClicked.connect(self._preview_media_from_thumbnail)
+        self.media_thumbnails.itemSelectionChanged.connect(self._update_media_selection_name)
         self._thumbnail_load_in_progress = False
         self._thumbnail_request_generation = 0
         self._thumbnail_loaded_fsids: set[str] = set()
@@ -891,6 +960,12 @@ class MainWindow(QMainWindow):
         self.media_view_mode_combo.currentIndexChanged.connect(self._set_media_view_mode)
         self._set_media_view_mode(self.media_view_mode_combo.currentIndex())
         right_layout.addWidget(self.media_views, 1)
+        self.media_selected_name = QLabel(right)
+        self.media_selected_name.setObjectName("muted")
+        self.media_selected_name.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.media_selected_name.setWordWrap(True)
+        self.media_selected_name.setVisible(False)
+        right_layout.addWidget(self.media_selected_name)
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setSizes([380, 950])
@@ -1201,7 +1276,7 @@ class MainWindow(QMainWindow):
         self.hero_connect.style().polish(self.hero_connect)
         for button in (
             self.hero_refresh, self.album_refresh, self.album_create, self.album_rename, self.album_delete,
-            self.media_upload, self.media_download, self.media_preview, self.media_delete, self.media_rename,
+            self.media_upload, self.media_download, self.media_preview, self.media_delete,
             self.plan_button, self.execute_button, self.clear_ignored_button,
         ):
             button.setEnabled(connected)
@@ -1663,12 +1738,37 @@ class MainWindow(QMainWindow):
             # item becomes visible in thumbnail mode.
             thumbnail = QListWidgetItem(icon, item.name)
             thumbnail.setData(Qt.UserRole, item.fsid)
+            thumbnail.setSizeHint(QSize(196, 208))
             thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n滚动到可见区域时加载缩略图；双击使用缩略图预览。")
             self.media_thumbnails.addItem(thumbnail)
         if self.media_view_mode == "thumbnails":
             self._schedule_visible_thumbnail_load()
         else:
             self._thumbnail_load_timer.stop()
+
+    def _update_media_selection_name(self) -> None:
+        if self.media_view_mode == "thumbnails":
+            selected_names = [item.text() for item in self.media_thumbnails.selectedItems()]
+        else:
+            selected_names = []
+            for row in self.media_table.selectionModel().selectedRows():
+                cell = self.media_table.item(row.row(), 0)
+                if cell is not None:
+                    selected_names.append(cell.text())
+        if len(selected_names) == 1:
+            full_name = selected_names[0]
+            self.media_selected_name.setText(f"已选择：{full_name}")
+            self.media_selected_name.setToolTip(full_name)
+            self.media_selected_name.setVisible(True)
+            return
+        if len(selected_names) > 1:
+            self.media_selected_name.setText(f"已选择 {len(selected_names)} 个媒体")
+            self.media_selected_name.setToolTip("")
+            self.media_selected_name.setVisible(True)
+            return
+        self.media_selected_name.clear()
+        self.media_selected_name.setToolTip("")
+        self.media_selected_name.setVisible(False)
 
     def eventFilter(self, watched: QObject, event) -> bool:  # type: ignore[override]
         if watched is getattr(self, "media_thumbnails", None).viewport() and event.type() in {
@@ -1684,6 +1784,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "media_views"):
             self.media_views.setCurrentIndex(1 if self.media_view_mode == "thumbnails" else 0)
         self.settings.setValue("media_browser_view_mode", self.media_view_mode)
+        if hasattr(self, "media_selected_name"):
+            self._update_media_selection_name()
         if self.media_view_mode == "thumbnails":
             self._schedule_visible_thumbnail_load()
         else:
@@ -1856,6 +1958,8 @@ class MainWindow(QMainWindow):
         self.current_media = []
         self.media_table.setRowCount(0)
         self.media_thumbnails.clear()
+        self.media_selected_name.clear()
+        self.media_selected_name.setVisible(False)
         self.media_title.setText("选择一个相册以浏览媒体")
         self.refresh_albums()
 
