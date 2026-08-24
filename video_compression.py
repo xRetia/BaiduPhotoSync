@@ -103,10 +103,16 @@ def _find_tool(name: str) -> Path:
     discovered = shutil.which(name)
     if discovered:
         return Path(discovered)
-    raise VideoCompressionError(
-        "未检测到 FFmpeg。请在“高级设置 → 视频”启用“压缩视频到30M以内”，"
-        "程序会下载并校验所需组件。"
-    )
+    if sys.platform.startswith("win"):
+        message = (
+            "未检测到 Windows FFmpeg。请在“高级设置 → 视频”启用“压缩视频到30M以内”，"
+            "程序会下载并校验所需组件。"
+        )
+    elif sys.platform == "darwin":
+        message = "未检测到 macOS FFmpeg。请安装 ffmpeg 与 ffprobe，并确认它们位于 PATH 后重新启用视频压缩。"
+    else:
+        message = "未检测到 Linux FFmpeg。请安装 ffmpeg 与 ffprobe，并确认它们位于 PATH 后重新启用视频压缩。"
+    raise VideoCompressionError(message)
 
 
 def locate_ffmpeg() -> Path:

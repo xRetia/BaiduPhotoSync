@@ -128,7 +128,13 @@ jobs:
           - **macOS x64 / arm64:** native application bundles; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
           - **Linux x86_64:** native extracted application directory; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
 
-          Photos are downloaded through the bounded local cache and opened in the desktop's configured default viewer.
+          ## v2.0.0 highlights
+
+          - Album browsing offers remembered **details** and **thumbnail** modes. Signed `thumburl` images power thumbnails and photo preview, while **Download** continues to save the original file.
+          - Windows FFmpeg installation replaces prior tool files safely and reports an actionable Windows-only message if the directory is occupied.
+          - FFmpeg guidance is platform-specific: Windows can download a verified component, while macOS and Linux use system `ffmpeg` and `ffprobe` from `PATH`.
+
+          Original downloads use the bounded local cache. Photo preview opens the preview thumbnail in the desktop's configured default viewer.
           EOF
           if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "${{ github.repository }}" --clobber

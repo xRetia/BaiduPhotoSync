@@ -9,12 +9,13 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.request import Request, urlopen
 from pathlib import Path
 import threading
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -116,6 +118,7 @@ VIDEO_MEDIA_ICON_PATH = APP_ROOT / "assets" / "video_media.svg"
 ERROR_LOG_PATH = Path.cwd() / "error.log"
 DOWNLOAD_CACHE_DEFAULT_MIB = 1024
 MIB = 1024 * 1024
+THUMBNAIL_DOWNLOAD_WORKERS = 4
 
 
 def download_cache_directory() -> Path:
@@ -531,7 +534,7 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(ignored_hint)
         reset_button = QPushButton("重置应用（清除本机全部数据）")
         reset_button.setObjectName("dangerButton")
-        reset_button.setToolTip("删除注册表设置与登录会话、AppData 缓存与 FFmpeg、程序目录 error.log，然后退出。")
+        reset_button.setToolTip("删除当前系统用户下的应用设置、登录会话、缓存、FFmpeg 组件与程序目录 error.log，然后退出。")
         reset_button.clicked.connect(self._reset_application)
         advanced_layout.addWidget(reset_button)
         advanced_layout.addStretch(1)
@@ -697,7 +700,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(
             self,
             "准备视频压缩组件失败",
-            "未能准备 FFmpeg，视频压缩已关闭。Windows 请检查网络后重试；macOS/Linux 请确认系统 PATH 中存在 ffmpeg 和 ffprobe。",
+            "未能下载或安装 Windows FFmpeg，视频压缩已关闭。请关闭可能占用 FFmpeg 的程序后检查网络并重试。",
         )
 
     def _load_ignored_albums(self) -> set[str]:
@@ -762,11 +765,20 @@ class MainWindow(QMainWindow):
         self.media_upload = self._button("上传", self.upload_media, True, QStyle.SP_ArrowUp)
         self.media_download = self._button("下载", self.download_media, icon=QStyle.SP_ArrowDown)
         self.media_preview = self._button("预览", self.preview_media, icon=QStyle.SP_FileDialogContentsView)
-        self.media_preview.setToolTip("下载选中的照片到临时目录并在应用内预览")
+        self.media_preview.setToolTip("使用云端缩略图并由系统默认查看器打开选中的照片；“下载”仍会保存原图。")
         self.media_delete = self._button("删除", self.delete_media, icon=QStyle.SP_TrashIcon)
         self.media_rename = self._button("重命名（受限）", self.rename_media, icon=QStyle.SP_FileDialogDetailedView)
         for button in (self.media_upload, self.media_download, self.media_preview, self.media_delete, self.media_rename):
             media_top.addWidget(button)
+        self.media_view_mode = str(self.settings.value("media_browser_view_mode", "details"))
+        if self.media_view_mode not in {"details", "thumbnails"}:
+            self.media_view_mode = "details"
+        self.media_view_mode_combo = QComboBox()
+        self.media_view_mode_combo.addItem("详细列表", "details")
+        self.media_view_mode_combo.addItem("缩略图", "thumbnails")
+        self.media_view_mode_combo.setCurrentIndex(1 if self.media_view_mode == "thumbnails" else 0)
+        self.media_view_mode_combo.setToolTip("切换相册媒体的浏览方式；程序会记住该选择。")
+        media_top.addWidget(self.media_view_mode_combo)
         right_layout.addLayout(media_top)
         self.media_table = QTableWidget(0, 5)
         self.media_table.setHorizontalHeaderLabels(["名称", "类型", "大小", "修改时间", "状态"])
@@ -778,7 +790,22 @@ class MainWindow(QMainWindow):
         self.media_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for column in (1, 2, 3, 4):
             self.media_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        right_layout.addWidget(self.media_table, 1)
+        self.media_thumbnails = QListWidget()
+        self.media_thumbnails.setViewMode(QListView.IconMode)
+        self.media_thumbnails.setSelectionMode(QListWidget.ExtendedSelection)
+        self.media_thumbnails.setResizeMode(QListView.Adjust)
+        self.media_thumbnails.setMovement(QListView.Static)
+        self.media_thumbnails.setWordWrap(True)
+        self.media_thumbnails.setIconSize(QSize(148, 148))
+        self.media_thumbnails.setGridSize(QSize(176, 205))
+        self.media_thumbnails.setSpacing(8)
+        self.media_thumbnails.itemDoubleClicked.connect(self._preview_media_from_thumbnail)
+        self.media_views = QStackedWidget()
+        self.media_views.addWidget(self.media_table)
+        self.media_views.addWidget(self.media_thumbnails)
+        self.media_view_mode_combo.currentIndexChanged.connect(self._set_media_view_mode)
+        self._set_media_view_mode(self.media_view_mode_combo.currentIndex())
+        right_layout.addWidget(self.media_views, 1)
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setSizes([380, 950])
@@ -1370,6 +1397,7 @@ class MainWindow(QMainWindow):
         self._sync_actions_by_sequence.clear()
         self.album_tree.clear()
         self.media_table.setRowCount(0)
+        self.media_thumbnails.clear()
         self.plan_table.setRowCount(0)
         self._set_connected(False)
 
@@ -1467,6 +1495,7 @@ class MainWindow(QMainWindow):
     def _media_loaded(self, media: object) -> None:
         self.current_media = media  # type: ignore[assignment]
         self.media_table.setRowCount(0)
+        self.media_thumbnails.clear()
         for row, item in enumerate(self.current_media):
             self.media_table.insertRow(row)
             icon, media_type = self._media_icon(item.name)
@@ -1478,6 +1507,95 @@ class MainWindow(QMainWindow):
             cells = [name, type_item, QTableWidgetItem(self._format_size(item.size)), QTableWidgetItem(self._format_time(item.modified_at)), QTableWidgetItem("云端媒体")]
             for column, cell in enumerate(cells):
                 self.media_table.setItem(row, column, cell)
+            thumbnail = QListWidgetItem(icon, item.name)
+            thumbnail.setData(Qt.UserRole, item.fsid)
+            thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n双击使用缩略图预览；下载按钮保存原图。")
+            self.media_thumbnails.addItem(thumbnail)
+        if self.current_media:
+            self._run_job(
+                "正在加载相册缩略图",
+                lambda progress: self._load_media_thumbnails(list(self.current_media), progress),
+                self._media_thumbnails_loaded,
+                self._media_thumbnails_failed,
+            )
+
+    def _set_media_view_mode(self, _index: int) -> None:
+        mode = str(self.media_view_mode_combo.currentData())
+        self.media_view_mode = mode if mode in {"details", "thumbnails"} else "details"
+        if hasattr(self, "media_views"):
+            self.media_views.setCurrentIndex(1 if self.media_view_mode == "thumbnails" else 0)
+        self.settings.setValue("media_browser_view_mode", self.media_view_mode)
+
+    def _load_media_thumbnails(
+        self, media: list[RemoteMedia], progress: Callable[[int, str], None]
+    ) -> dict[str, Path]:
+        thumbnail_media = [item for item in media if item.thumbnail_url]
+        if not thumbnail_media:
+            progress(100, "当前相册没有可用缩略图")
+            return {}
+        total = len(thumbnail_media)
+        completed = 0
+        completed_lock = threading.Lock()
+
+        def fetch_one(item: RemoteMedia) -> tuple[str, Path]:
+            assert item.thumbnail_url
+            cached = self.download_cache.get_or_download(
+                item.album_id,
+                item.fsid,
+                0,
+                lambda cache_directory: self._download_signed_thumbnail(item.thumbnail_url or "", cache_directory, "thumbnail.jpg"),
+                variant="thumbnail",
+            )
+            return item.fsid, cached.path
+
+        output: dict[str, Path] = {}
+        with ThreadPoolExecutor(max_workers=THUMBNAIL_DOWNLOAD_WORKERS, thread_name_prefix="thumbnail") as pool:
+            futures = {pool.submit(fetch_one, item): item for item in thumbnail_media}
+            for future in as_completed(futures):
+                item = futures[future]
+                try:
+                    fsid, path = future.result()
+                    output[fsid] = path
+                except Exception as exc:  # noqa: BLE001 - one broken thumbnail must not hide the album
+                    LOGGER.debug("读取缩略图失败：%s：%s", item.name, type(exc).__name__)
+                with completed_lock:
+                    completed += 1
+                    current = completed
+                progress(int(current / total * 100), f"已加载缩略图 {current}/{total}")
+        return output
+
+    @staticmethod
+    def _download_signed_thumbnail(url: str, target_directory: Path, filename: str) -> Path:
+        if not url.lower().startswith("https://"):
+            raise RemoteClientError("缩略图地址无效。")
+        target = target_directory / filename
+        request = Request(url, headers={"User-Agent": "BaiduPhotoSync/2.0"})
+        try:
+            with urlopen(request, timeout=20) as response, target.open("wb") as output:
+                shutil.copyfileobj(response, output)
+        except OSError as exc:
+            target.unlink(missing_ok=True)
+            raise RemoteClientError("缩略图下载失败。") from exc
+        if not target.is_file() or target.stat().st_size == 0:
+            raise RemoteClientError("缩略图为空。")
+        return target
+
+    def _media_thumbnails_loaded(self, output: object) -> None:
+        thumbnails = output if isinstance(output, dict) else {}
+        for index in range(self.media_thumbnails.count()):
+            item = self.media_thumbnails.item(index)
+            path = thumbnails.get(item.data(Qt.UserRole))
+            if not isinstance(path, Path) or not path.is_file():
+                continue
+            pixmap = QPixmap(str(path))
+            if not pixmap.isNull():
+                item.setIcon(QIcon(pixmap))
+        if thumbnails:
+            self.status.showMessage(f"已加载 {len(thumbnails)} 张相册缩略图。", 3500)
+
+    def _media_thumbnails_failed(self, _error: str) -> None:
+        # 列表图标仍可正常浏览；实际原图下载不依赖缩略图服务。
+        self.status.showMessage("部分相册缩略图未能加载，仍可使用详细列表或下载原图。", 5000)
 
     # ----- album actions -------------------------------------------
     def create_album(self) -> None:
@@ -1537,12 +1655,20 @@ class MainWindow(QMainWindow):
         self.current_album = None
         self.current_media = []
         self.media_table.setRowCount(0)
+        self.media_thumbnails.clear()
         self.media_title.setText("选择一个相册以浏览媒体")
         self.refresh_albums()
 
     # ----- media actions -------------------------------------------
     def _selected_media(self) -> list[RemoteMedia]:
-        selected = {self.media_table.item(row.row(), 0).data(Qt.UserRole) for row in self.media_table.selectionModel().selectedRows()}
+        if self.media_view_mode == "thumbnails":
+            selected = {item.data(Qt.UserRole) for item in self.media_thumbnails.selectedItems()}
+        else:
+            selected = {
+                self.media_table.item(row.row(), 0).data(Qt.UserRole)
+                for row in self.media_table.selectionModel().selectedRows()
+                if self.media_table.item(row.row(), 0) is not None
+            }
         return [item for item in self.current_media if item.fsid in selected]
 
     def upload_media(self) -> None:
@@ -1659,7 +1785,12 @@ class MainWindow(QMainWindow):
         item_cell = self.media_table.item(row, 0)
         if item_cell is None:
             return
-        fsid = item_cell.data(Qt.UserRole)
+        self._start_preview_for_fsid(item_cell.data(Qt.UserRole))
+
+    def _preview_media_from_thumbnail(self, thumbnail: QListWidgetItem) -> None:
+        self._start_preview_for_fsid(thumbnail.data(Qt.UserRole))
+
+    def _start_preview_for_fsid(self, fsid: object) -> None:
         item = next((candidate for candidate in self.current_media if candidate.fsid == fsid), None)
         if item is not None:
             self._start_photo_preview(item)
@@ -1677,6 +1808,9 @@ class MainWindow(QMainWindow):
         if not self._is_previewable_photo(item):
             QMessageBox.information(self, "暂不支持预览", "当前预览仅支持照片，请使用“下载”保存视频或其他文件。")
             return
+        if not item.preview_url:
+            QMessageBox.information(self, "缺少缩略图", "当前照片未返回可用缩略图，请使用“下载”保存原图后查看。")
+            return
         if self._preview_pending:
             self.status.showMessage("正在准备当前照片预览，请稍候。", 4000)
             return
@@ -1684,7 +1818,7 @@ class MainWindow(QMainWindow):
         self.media_preview.setEnabled(False)
         album_id = self.current_album.album_id
         self._run_job(
-            "正在下载预览照片",
+            "正在准备照片预览",
             lambda progress: self._download_preview_photo(album_id, item, progress),
             self._preview_photo_downloaded,
             self._preview_photo_download_failed,
@@ -1696,16 +1830,16 @@ class MainWindow(QMainWindow):
         item: RemoteMedia,
         progress: Callable[[int, str], None],
     ) -> Path:
-        assert self.client
-        progress(10, f"正在准备预览：{item.name}")
-        client = self.client.create_isolated_album_client(album_id)
+        assert item.preview_url
+        progress(10, f"正在读取预览缩略图：{item.name}")
         cached = self.download_cache.get_or_download(
             album_id,
             item.fsid,
-            item.size,
-            lambda cache_directory: client.download_media(album_id, item.fsid, cache_directory),
+            0,
+            lambda cache_directory: self._download_signed_thumbnail(item.preview_url or "", cache_directory, "preview.jpg"),
+            variant="preview",
         )
-        progress(100, f"预览文件已准备：{item.name}（{'缓存命中' if cached.hit else '已缓存'}）")
+        progress(100, f"预览缩略图已准备：{item.name}（{'缓存命中' if cached.hit else '已缓存'}）")
         return cached.path
 
     def _preview_photo_downloaded(self, output: object) -> None:
@@ -1723,7 +1857,7 @@ class MainWindow(QMainWindow):
     def _preview_photo_download_failed(self, _error: str) -> None:
         self._preview_pending = False
         self.media_preview.setEnabled(self.client is not None)
-        self.status.showMessage("照片预览下载失败，请检查网络或重新登录后再试。", 8000)
+        self.status.showMessage("照片缩略图预览失败，请检查网络或重新登录后再试。", 8000)
 
     def _discard_preview_cache(self) -> None:
         """Retained lifecycle hook; preview files now stay in bounded media cache."""

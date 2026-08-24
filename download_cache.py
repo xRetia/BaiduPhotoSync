@@ -30,17 +30,20 @@ class DownloadCache:
         self.root = root
         self.max_bytes = max(0, int(max_bytes))
         self._lock = threading.RLock()
-        self._entry_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._entry_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
     @staticmethod
     def _safe_component(value: str) -> str:
         return "".join(character if character.isalnum() or character in "-_." else "_" for character in value)[:160] or "item"
 
-    def _entry_directory(self, album_id: str, fsid: str) -> Path:
-        return self.root / self._safe_component(album_id) / self._safe_component(fsid)
+    def _entry_directory(self, album_id: str, fsid: str, variant: str = "original") -> Path:
+        root = self.root / self._safe_component(album_id) / self._safe_component(fsid)
+        # Preserve the original-file layout used by earlier releases while
+        # isolating thumbnail and preview bytes below the same media key.
+        return root if variant == "original" else root / self._safe_component(variant)
 
-    def _entry_files(self, album_id: str, fsid: str) -> list[Path]:
-        directory = self._entry_directory(album_id, fsid)
+    def _entry_files(self, album_id: str, fsid: str, variant: str = "original") -> list[Path]:
+        directory = self._entry_directory(album_id, fsid, variant)
         if not directory.is_dir():
             return []
         return [path for path in directory.iterdir() if path.is_file() and not path.name.endswith(".part")]
@@ -52,10 +55,10 @@ class DownloadCache:
         except OSError:
             return False
 
-    def lookup(self, album_id: str, fsid: str, expected_size: int = 0) -> Path | None:
+    def lookup(self, album_id: str, fsid: str, expected_size: int = 0, variant: str = "original") -> Path | None:
         """Return a complete matching entry and update its access time."""
         with self._lock:
-            for path in self._entry_files(album_id, fsid):
+            for path in self._entry_files(album_id, fsid, variant):
                 if self._matches_expected_size(path, expected_size):
                     try:
                         os.utime(path, None)
@@ -70,18 +73,19 @@ class DownloadCache:
         fsid: str,
         expected_size: int,
         downloader: Callable[[Path], Path],
+        variant: str = "original",
     ) -> CacheResult:
         """Return an existing entry or download atomically into its cache slot."""
-        key = (album_id, fsid)
+        key = (album_id, fsid, variant)
         with self._lock:
             entry_lock = self._entry_locks.setdefault(key, threading.Lock())
         # Separate media keep separate locks, preserving multi-client transfer
         # concurrency while preventing duplicate downloads of the same file.
         with entry_lock:
-            hit = self.lookup(album_id, fsid, expected_size)
+            hit = self.lookup(album_id, fsid, expected_size, variant)
             if hit is not None:
                 return CacheResult(hit, True)
-            entry_directory = self._entry_directory(album_id, fsid)
+            entry_directory = self._entry_directory(album_id, fsid, variant)
             shutil.rmtree(entry_directory, ignore_errors=True)
             entry_directory.mkdir(parents=True, exist_ok=True)
             try:

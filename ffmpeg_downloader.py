@@ -100,9 +100,22 @@ def _download_archive(target: Path, progress: ProgressCallback | None) -> str:
 
 
 def _extract_tools(archive: Path, destination: Path) -> tuple[Path, Path]:
-    stage = destination.parent / ".ffmpeg_extracting"
+    """Install both tools atomically without deleting an in-use installation.
+
+    On Windows an anti-virus scanner, a running ffmpeg process, or another
+    BaiduPhotoSync process can temporarily hold the existing directory.  The
+    earlier ``rmtree(..., ignore_errors=True)`` plus ``replace`` sequence then
+    attempted to replace a still-present destination and raised WinError 5.
+    Keep the previous directory until the new pair is fully extracted, move it
+    aside, then restore it if promotion fails.
+    """
+    nonce = f"{os.getpid()}-{time.time_ns()}"
+    stage = destination.parent / f".ffmpeg_extracting-{nonce}"
+    previous = destination.parent / f".ffmpeg_previous-{nonce}"
     shutil.rmtree(stage, ignore_errors=True)
+    shutil.rmtree(previous, ignore_errors=True)
     stage.mkdir(parents=True, exist_ok=True)
+    moved_previous = False
     try:
         with zipfile.ZipFile(archive) as zip_file:
             names = {Path(info.filename).name: info for info in zip_file.infolist()}
@@ -113,12 +126,40 @@ def _extract_tools(archive: Path, destination: Path) -> tuple[Path, Path]:
             for info, name in ((ffmpeg_info, "ffmpeg.exe"), (ffprobe_info, "ffprobe.exe")):
                 with zip_file.open(info) as source, (stage / name).open("wb") as output:
                     shutil.copyfileobj(source, output)
-        shutil.rmtree(destination, ignore_errors=True)
-        stage.replace(destination)
+        if destination.exists():
+            try:
+                destination.replace(previous)
+                moved_previous = True
+            except PermissionError as exc:
+                raise FFmpegDownloadError(
+                    "FFmpeg 安装目录正被占用。请关闭其他一刻同步窗口、视频压缩任务或安全软件的扫描后重试。"
+                ) from exc
+        try:
+            stage.replace(destination)
+        except PermissionError as exc:
+            if moved_previous and not destination.exists() and previous.exists():
+                previous.replace(destination)
+            raise FFmpegDownloadError(
+                "无法写入 FFmpeg 安装目录。请关闭占用程序后重试，或确认当前 Windows 用户对应用数据目录具有写入权限。"
+            ) from exc
+        shutil.rmtree(previous, ignore_errors=True)
         return destination / "ffmpeg.exe", destination / "ffprobe.exe"
-    except (OSError, zipfile.BadZipFile) as exc:
+    except FFmpegDownloadError:
+        if moved_previous and not destination.exists() and previous.exists():
+            try:
+                previous.replace(destination)
+            except OSError:
+                pass
         shutil.rmtree(stage, ignore_errors=True)
-        raise FFmpegDownloadError(f"FFmpeg 解压失败：{type(exc).__name__}") from exc
+        raise
+    except (OSError, zipfile.BadZipFile) as exc:
+        if moved_previous and not destination.exists() and previous.exists():
+            try:
+                previous.replace(destination)
+            except OSError:
+                pass
+        shutil.rmtree(stage, ignore_errors=True)
+        raise FFmpegDownloadError(f"FFmpeg 解压或安装失败：{type(exc).__name__}") from exc
 
 
 def ensure_windows_ffmpeg(progress: ProgressCallback | None = None) -> FFmpegDownloadResult:

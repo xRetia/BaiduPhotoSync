@@ -80,6 +80,8 @@ class RemoteMedia:
     created_at: int | None
     md5: str | None
     album_id: str
+    thumbnail_url: str | None
+    preview_url: str | None
 
 
 def parse_cookie_text(text: str) -> dict[str, str]:
@@ -586,6 +588,20 @@ class YikeRemoteClient:
                 for item in objects:
                     info = getattr(item, "info", {})
                     fsid = str(item.getID())
+                    thumbnail_urls = info.get("thumburl") if isinstance(info, dict) else None
+                    if isinstance(thumbnail_urls, (list, tuple)):
+                        valid_thumbnail_urls = [str(url) for url in thumbnail_urls if isinstance(url, str) and url]
+                    elif isinstance(thumbnail_urls, str) and thumbnail_urls:
+                        valid_thumbnail_urls = [thumbnail_urls]
+                    else:
+                        valid_thumbnail_urls = []
+                    # The service returns compact and larger signed thumbnail URLs
+                    # in order.  Keep both roles separate: the compact image feeds
+                    # the gallery, while the largest supplied thumbnail is used for
+                    # system-viewer preview.  Original downloads still go through
+                    # the authenticated OnlineItem download flow below.
+                    thumbnail_url = valid_thumbnail_urls[0] if valid_thumbnail_urls else None
+                    preview_url = valid_thumbnail_urls[-1] if valid_thumbnail_urls else None
                     self._media[(album_id, fsid)] = item
                     result.append(
                         RemoteMedia(
@@ -596,6 +612,8 @@ class YikeRemoteClient:
                             created_at=self._as_int(info.get("ctime")),
                             md5=info.get("md5"),
                             album_id=album_id,
+                            thumbnail_url=thumbnail_url,
+                            preview_url=preview_url,
                         )
                     )
                 result = sorted(result, key=lambda row: row.name.casefold())
