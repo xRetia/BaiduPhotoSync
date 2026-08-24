@@ -281,11 +281,82 @@ class CookieDialog(QDialog):
         return self.remember_cookie.isChecked()
 
 
+class StartupLoadingWindow(QFrame):
+    """A small, non-interactive startup surface shown before the main window.
+
+    Restoring native window geometry after a visible top-level window has been
+    created can produce a noticeable move/resize flash on desktop platforms.
+    This surface remains centered while the real window is built off-screen,
+    then closes only after the final geometry is ready to show.
+    """
+
+    def __init__(self, icon: QIcon, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("startupLoading")
+        self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setFixedSize(372, 238)
+        self.setStyleSheet(
+            """
+            QFrame#startupLoading {
+                background: #ffffff;
+                border: 1px solid #d7e4f5;
+                border-radius: 16px;
+            }
+            QLabel#startupTitle { color: #1d63bf; font-size: 20px; font-weight: 700; }
+            QLabel#startupStatus { color: #718096; font-size: 13px; }
+            QProgressBar#startupProgress {
+                border: 0; background: #e8f0fb; border-radius: 5px; min-height: 10px;
+            }
+            QProgressBar#startupProgress::chunk { background: #2d7de0; border-radius: 5px; }
+            """
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 25)
+        layout.setSpacing(10)
+        image = QLabel(self)
+        pixmap = icon.pixmap(QSize(70, 70))
+        if not pixmap.isNull():
+            image.setPixmap(pixmap)
+        image.setFixedHeight(74)
+        image.setAlignment(Qt.AlignCenter)
+        layout.addWidget(image)
+        title = QLabel("一刻相册同步助手", self)
+        title.setObjectName("startupTitle")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        self.status_label = QLabel("正在准备应用…", self)
+        self.status_label.setObjectName("startupStatus")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setObjectName("startupProgress")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setValue(5)
+        layout.addWidget(self.progress_bar)
+
+    def show_centered(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.move(available.center() - self.rect().center())
+        self.show()
+        self.raise_()
+
+    def set_stage(self, value: int, text: str) -> None:
+        self.progress_bar.setValue(max(0, min(100, int(value))))
+        self.status_label.setText(text)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, startup_loading: StartupLoadingWindow | None = None):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(880, 520)
+        self._startup_loading = startup_loading
+        self._initial_login_pending = False
+        self._startup_main_revealed = False
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
         migrate_legacy_windows_data()
         self._restore_window_geometry()
@@ -327,8 +398,12 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._set_debug_logging(self.debug_checkbox.isChecked())
         self._set_connected(False)
-        QTimer.singleShot(0, self._check_ffmpeg_at_startup)
-        QTimer.singleShot(0, self._restore_or_prompt_login)
+        # Standalone MainWindow construction remains useful for tests and
+        # developer runs.  Production startup passes a loading window and
+        # explicitly invokes start_after_loading() before showing this window.
+        if self._startup_loading is None:
+            QTimer.singleShot(0, self._check_ffmpeg_at_startup)
+            QTimer.singleShot(0, self._restore_or_prompt_login)
 
     # ----- UI layout -------------------------------------------------
     def _build_ui(self) -> None:
@@ -1061,6 +1136,10 @@ class MainWindow(QMainWindow):
         safe_value = max(0, min(100, value))
         self.progress.setValue(safe_value)
         self.progress.setFormat(text)
+        if self._startup_loading is not None and self._startup_loading.isVisible():
+            # Reserve the latter half of the splash bar for authenticated
+            # startup work while preserving the worker's real progress text.
+            self._startup_loading.set_stage(35 + int(safe_value * 0.55), text)
         if self._ffmpeg_download_dialog is not None:
             self._ffmpeg_download_dialog.setValue(safe_value)
             self._ffmpeg_download_dialog.setLabelText(text)
@@ -1192,6 +1271,56 @@ class MainWindow(QMainWindow):
         self.compress_video_checkbox.blockSignals(False)
         self.settings.setValue("compress_oversize_videos", False)
         self.status.showMessage("未下载视频压缩组件，已关闭视频压缩。", 6000)
+
+    def start_after_loading(self) -> None:
+        """Gate the first visible window on a real account-permission check."""
+        if self._startup_loading is None:
+            self._restore_or_prompt_login()
+            return
+        self._startup_loading.set_stage(35, "正在检查账号权限…")
+        saved_cookie = self.session_store.load().strip()
+        if saved_cookie:
+            self.status.showMessage("正在校验本机保存的登录会话…")
+            self._begin_login(
+                saved_cookie,
+                save_after_verify=True,
+                on_success=self._startup_session_verified,
+                on_failure=self._startup_session_unavailable,
+            )
+            return
+        self._startup_session_unavailable("未发现保存的登录会话。")
+
+    def _startup_session_verified(self, client: object) -> None:
+        self._connected(client)
+        self._reveal_main_after_startup()
+
+    def _startup_session_unavailable(self, _error: str) -> None:
+        # A stored credential that no longer has permission is cleared before
+        # opening a new QR flow.  The main window deliberately stays hidden.
+        self.session_keepalive.stop()
+        self.session_store.clear()
+        self._pending_cookie_text = ""
+        self._save_session_after_connect = False
+        if self._startup_loading is not None:
+            self._startup_loading.set_stage(90, "请登录一刻相册…")
+            QApplication.instance().processEvents()
+            self._startup_loading.close()
+            self._startup_loading = None
+        self._initial_login_pending = True
+        self._open_qr_login()
+
+    def _reveal_main_after_startup(self) -> None:
+        if self._startup_main_revealed:
+            return
+        self._startup_main_revealed = True
+        if self._startup_loading is not None:
+            self._startup_loading.set_stage(100, "账号验证成功")
+        self.show()
+        QApplication.instance().processEvents()
+        if self._startup_loading is not None:
+            self._startup_loading.close()
+            self._startup_loading = None
+        QTimer.singleShot(0, self._check_ffmpeg_at_startup)
 
     def _restore_or_prompt_login(self) -> None:
         """Validate the saved session first; show Baidu QR only when needed."""
@@ -1330,8 +1459,13 @@ class MainWindow(QMainWindow):
         self._qr_login_attempts = 0
         self._qr_candidate_cookie = ""
         dialog.verification_succeeded()
+        reveal_after_dialog = self._initial_login_pending
+        if reveal_after_dialog:
+            self._initial_login_pending = False
         self._connected(client)
         QTimer.singleShot(180, dialog.accept)
+        if reveal_after_dialog:
+            QTimer.singleShot(220, self._reveal_main_after_startup)
 
     def _connected(self, client: object) -> None:
         self.client = client  # type: ignore[assignment]
@@ -1359,6 +1493,11 @@ class MainWindow(QMainWindow):
             enhanced_refresh=self.settings.value("enhanced_keepalive", False, type=bool),
         )
         self.refresh_albums()
+        # This path covers a pasted Cookie during initial startup.  QR success
+        # defers its reveal until the login dialog has closed instead.
+        if self._initial_login_pending:
+            self._initial_login_pending = False
+            QTimer.singleShot(0, self._reveal_main_after_startup)
 
     def _apply_keepalive_cookie(self, cookie_text: str) -> None:
         """Persist a rotated browser session without treating refresh errors as logout."""
@@ -2511,10 +2650,20 @@ def main() -> int:
     icon = QIcon(str(APP_ICON_PATH))
     if not icon.isNull():
         app.setWindowIcon(icon)
-    window = MainWindow()
+    startup = StartupLoadingWindow(icon)
+    startup.show_centered()
+    app.processEvents()
+    startup.set_stage(24, "正在恢复窗口位置…")
+    app.processEvents()
+    window = MainWindow(startup)
     if not icon.isNull():
         window.setWindowIcon(icon)
-    window.show()
+    startup.set_stage(30, "正在检查账号权限…")
+    app.processEvents()
+    # The window geometry is restored during construction, but the main window
+    # is intentionally not shown here.  start_after_loading() either verifies
+    # the account and reveals it, or closes the splash and opens the login UI.
+    QTimer.singleShot(0, window.start_after_loading)
     return app.exec()
 
 
