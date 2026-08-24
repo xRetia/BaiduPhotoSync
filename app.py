@@ -11,10 +11,11 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import threading
+import tempfile
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QProgressDialog,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
@@ -262,6 +264,35 @@ class CookieDialog(QDialog):
         return self.remember_cookie.isChecked()
 
 
+class PhotoPreviewDialog(QDialog):
+    """Display one downloaded photo without exposing the temporary cache path."""
+
+    def __init__(self, image_path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle(f"预览：{image_path.name}")
+        self.resize(980, 720)
+        layout = QVBoxLayout(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setMinimumSize(360, 260)
+        pixmap = QPixmap(str(image_path))
+        if pixmap.isNull():
+            image_label.setText("该文件已下载到临时目录，但当前程序无法渲染此图片格式。")
+            image_label.setWordWrap(True)
+        else:
+            # Keep the original pixels available through scrolling rather than
+            # downscaling a large source image to an unreadable preview.
+            image_label.setPixmap(pixmap)
+            image_label.resize(pixmap.size())
+        scroll.setWidget(image_label)
+        layout.addWidget(scroll, 1)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.accept)
+        layout.addWidget(close_button, alignment=Qt.AlignRight)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -290,6 +321,9 @@ class MainWindow(QMainWindow):
         self._save_session_after_connect = False
         self._ffmpeg_download_dialog: QProgressDialog | None = None
         self._ffmpeg_downloading = False
+        self._preview_directory: Path | None = None
+        self._preview_dialog: PhotoPreviewDialog | None = None
+        self._preview_pending = False
         self.albums: list[RemoteAlbum] = []
         self.current_album: RemoteAlbum | None = None
         self.current_media: list[RemoteMedia] = []
@@ -326,6 +360,14 @@ class MainWindow(QMainWindow):
         hero = QFrame()
         hero.setObjectName("hero")
         hero_layout = QHBoxLayout(hero)
+        hero_icon = QLabel(hero)
+        hero_icon.setObjectName("heroYikeIcon")
+        hero_pixmap = QPixmap(str(APP_ICON_PATH))
+        if not hero_pixmap.isNull():
+            hero_icon.setPixmap(hero_pixmap.scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        hero_icon.setFixedSize(60, 60)
+        hero_icon.setAlignment(Qt.AlignCenter)
+        hero_layout.addWidget(hero_icon)
         heading = QVBoxLayout()
         heading.setSpacing(2)
         title = QLabel("一刻相册同步助手")
@@ -706,9 +748,11 @@ class MainWindow(QMainWindow):
         media_top.addStretch()
         self.media_upload = self._button("上传", self.upload_media, True, QStyle.SP_ArrowUp)
         self.media_download = self._button("下载", self.download_media, icon=QStyle.SP_ArrowDown)
+        self.media_preview = self._button("预览", self.preview_media, icon=QStyle.SP_FileDialogContentsView)
+        self.media_preview.setToolTip("下载选中的照片到临时目录并在应用内预览")
         self.media_delete = self._button("删除", self.delete_media, icon=QStyle.SP_TrashIcon)
         self.media_rename = self._button("重命名（受限）", self.rename_media, icon=QStyle.SP_FileDialogDetailedView)
-        for button in (self.media_upload, self.media_download, self.media_delete, self.media_rename):
+        for button in (self.media_upload, self.media_download, self.media_preview, self.media_delete, self.media_rename):
             media_top.addWidget(button)
         right_layout.addLayout(media_top)
         self.media_table = QTableWidget(0, 5)
@@ -717,6 +761,7 @@ class MainWindow(QMainWindow):
         self.media_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.media_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.media_table.verticalHeader().setVisible(False)
+        self.media_table.cellDoubleClicked.connect(self._preview_media_from_row)
         self.media_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for column in (1, 2, 3, 4):
             self.media_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
@@ -996,7 +1041,7 @@ class MainWindow(QMainWindow):
         self.hero_connect.style().polish(self.hero_connect)
         for button in (
             self.hero_refresh, self.album_refresh, self.album_create, self.album_rename, self.album_delete,
-            self.media_upload, self.media_download, self.media_delete, self.media_rename,
+            self.media_upload, self.media_download, self.media_preview, self.media_delete, self.media_rename,
             self.plan_button, self.execute_button, self.clear_ignored_button,
         ):
             button.setEnabled(connected)
@@ -1257,6 +1302,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _clear_connected_account(self) -> None:
+        self._discard_preview_cache()
         self.session_keepalive.stop()
         self.session_store.clear()
         self.client = None
@@ -1538,6 +1584,98 @@ class MainWindow(QMainWindow):
                     current = completed
                 progress(int(current / total * 100), f"已下载 {completed_name}（{current}/{total}，并发 {workers}）")
         progress(100, "下载完成")
+
+    @staticmethod
+    def _is_previewable_photo(item: RemoteMedia) -> bool:
+        return Path(item.name).suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".tif", ".tiff"}
+
+    def _preview_media_from_row(self, row: int, _column: int) -> None:
+        item_cell = self.media_table.item(row, 0)
+        if item_cell is None:
+            return
+        fsid = item_cell.data(Qt.UserRole)
+        item = next((candidate for candidate in self.current_media if candidate.fsid == fsid), None)
+        if item is not None:
+            self._start_photo_preview(item)
+
+    def preview_media(self) -> None:
+        selected = self._selected_media()
+        if len(selected) != 1:
+            QMessageBox.information(self, "选择一张照片", "请在相册浏览中选择一张照片后再预览。")
+            return
+        self._start_photo_preview(selected[0])
+
+    def _start_photo_preview(self, item: RemoteMedia) -> None:
+        if not self.client or not self.current_album:
+            return
+        if not self._is_previewable_photo(item):
+            QMessageBox.information(self, "暂不支持预览", "当前预览仅支持照片，请使用“下载”保存视频或其他文件。")
+            return
+        if self._preview_pending:
+            self.status.showMessage("正在准备当前照片预览，请稍候。", 4000)
+            return
+        self._discard_preview_cache()
+        self._preview_directory = Path(tempfile.mkdtemp(prefix="BaiduPhotoSync-preview-"))
+        self._preview_pending = True
+        self.media_preview.setEnabled(False)
+        album_id = self.current_album.album_id
+        self._run_job(
+            "正在下载预览照片",
+            lambda progress: self._download_preview_photo(album_id, item, self._preview_directory, progress),
+            self._preview_photo_downloaded,
+            self._preview_photo_download_failed,
+        )
+
+    def _download_preview_photo(
+        self,
+        album_id: str,
+        item: RemoteMedia,
+        target_directory: Path | None,
+        progress: Callable[[int, str], None],
+    ) -> Path:
+        assert self.client
+        if target_directory is None:
+            raise RemoteClientError("预览临时目录不可用。")
+        progress(10, f"正在下载预览：{item.name}")
+        client = self.client.create_isolated_album_client(album_id)
+        output = client.download_media(album_id, item.fsid, target_directory)
+        progress(100, f"预览文件已准备：{item.name}")
+        return output
+
+    def _preview_photo_downloaded(self, output: object) -> None:
+        self._preview_pending = False
+        self.media_preview.setEnabled(self.client is not None)
+        image_path = Path(str(output))
+        if not image_path.is_file():
+            self._preview_photo_download_failed("预览文件不存在。")
+            return
+        dialog = PhotoPreviewDialog(image_path, self)
+        self._preview_dialog = dialog
+        dialog.finished.connect(lambda _result, current=dialog: self._preview_dialog_finished(current))
+        dialog.show()
+        self.status.showMessage(f"已打开预览：{image_path.name}", 5000)
+
+    def _preview_photo_download_failed(self, _error: str) -> None:
+        self._preview_pending = False
+        self.media_preview.setEnabled(self.client is not None)
+        self._discard_preview_cache()
+        self.status.showMessage("照片预览下载失败，请检查网络或重新登录后再试。", 8000)
+
+    def _preview_dialog_finished(self, dialog: PhotoPreviewDialog) -> None:
+        if self._preview_dialog is dialog:
+            self._preview_dialog = None
+            dialog.deleteLater()
+            self._discard_preview_cache()
+
+    def _discard_preview_cache(self) -> None:
+        if self._preview_dialog is not None:
+            dialog = self._preview_dialog
+            self._preview_dialog = None
+            dialog.close()
+            dialog.deleteLater()
+        if self._preview_directory is not None:
+            shutil.rmtree(self._preview_directory, ignore_errors=True)
+            self._preview_directory = None
 
     def delete_media(self) -> None:
         if not self.client or not self.current_album:
@@ -2094,6 +2232,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 self.status.showMessage("正在等待当前网络请求安全结束，请稍后再次关闭窗口。", 8000)
                 return
+        self._discard_preview_cache()
         self.session_keepalive.stop()
         self.client = None  # Drop the in-memory Cookie reference.
         self._pending_cookie_text = ""

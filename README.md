@@ -8,7 +8,7 @@ A desktop application for synchronizing local photo folders with Baidu Photo alb
 
 | Area | Capability |
 | --- | --- |
-| Album browser | Browse cloud albums and media, then create, rename, delete, upload, or download from one desktop interface. |
+| Album browser | Browse cloud albums and media, then create, rename, delete, upload, download, or preview a selected photo from one desktop interface. |
 | Sync planner | Map local folders to cloud albums, compare content, produce an explicit plan, and control execution with pause, resume, and stop actions. |
 | Safe defaults | Keep destructive synchronization disabled by default and surface file conflicts before any transfer begins. |
 | Video handling | Optionally create a temporary upload copy for oversize video files while keeping the local original unchanged. |
@@ -61,7 +61,7 @@ Video compression is optional and disabled by default. When enabled, the applica
 
 ## Privacy and Data Handling
 
-The QR-code flow is displayed in the application rather than requiring a separate browser; a pasted-Cookie sign-in option is also available inside that flow. A validated local sign-in session is kept for the current Windows user, and the project does not intend to write cookies to application logs. While the application is open, a hidden private WebView keeps the Baidu Photo session page loaded and can save a rotated complete session back to the encrypted local store. The optional **Enhanced Account Keepalive** setting reloads `https://photo.baidu.com/photo/web/home` every three minutes; it is disabled by default because the page itself maintains its session through JavaScript. The hidden view stops on re-login, verified sign-out, application reset, and normal shutdown. Treat any local session as sensitive and use the application only on a trusted Windows account.
+The QR-code flow is displayed in the application rather than requiring a separate browser; a pasted-Cookie sign-in option is also available inside that flow. The preview command downloads one selected photo into a private temporary folder, displays it in an in-app window, and removes that cached copy when the preview closes. A validated local sign-in session is kept for the current Windows user, and the project does not intend to write cookies to application logs. While the application is open, a hidden private WebView keeps the Baidu Photo session page loaded and can save a rotated complete session back to the encrypted local store. The optional **Enhanced Account Keepalive** setting reloads `https://photo.baidu.com/photo/web/home` every three minutes; it is disabled by default because the page itself maintains its session through JavaScript. The hidden view stops on re-login, verified sign-out, application reset, and normal shutdown. Treat any local session as sensitive and use the application only on a trusted Windows account.
 
 ## Build from Source
 
