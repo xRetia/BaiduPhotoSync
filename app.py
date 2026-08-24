@@ -66,6 +66,7 @@ from sync_engine import FileCompareMode, PlanAction, SortField, SyncAction, Sync
 from video_compression import VideoCompressionError, VideoCompressionOptions, locate_ffmpeg, prepared_video_upload
 from ffmpeg_downloader import FFmpegDownloadError, ensure_windows_ffmpeg
 from download_cache import DownloadCache
+from media_validation import MEDIA_EXTENSIONS, PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, validate_media_file
 from platform_services import (
     app_data_directory,
     clear_windows_registry_settings,
@@ -73,6 +74,18 @@ from platform_services import (
     open_system_viewer,
     remove_application_data,
 )
+
+
+def _file_filter_label(label: str, extensions: frozenset[str]) -> str:
+    patterns = " ".join(f"*{extension}" for extension in sorted(extensions))
+    return f"{label} ({patterns})"
+
+
+UPLOAD_MEDIA_FILTER = ";;".join((
+    _file_filter_label("所有支持的媒体文件", MEDIA_EXTENSIONS),
+    _file_filter_label("图片文件", PHOTO_EXTENSIONS),
+    _file_filter_label("视频文件", VIDEO_EXTENSIONS),
+))
 
 
 class PlanTable(QTableWidget):
@@ -2005,11 +2018,32 @@ class MainWindow(QMainWindow):
         if not self.client or not self.current_album:
             QMessageBox.information(self, "请选择相册", "请先选择上传目标相册。")
             return
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择要上传的照片或视频")
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择要上传的照片或视频",
+            "",
+            UPLOAD_MEDIA_FILTER,
+        )
         if not paths:
             return
+        files: list[Path] = []
+        rejected: list[str] = []
+        for raw_path in paths:
+            path = Path(raw_path)
+            valid, reason = validate_media_file(path)
+            if valid:
+                files.append(path)
+            else:
+                rejected.append(f"{path.name}（{reason}）")
+        if rejected:
+            QMessageBox.warning(
+                self,
+                "已跳过不支持的文件",
+                "只能上传支持的图片或视频。以下文件未加入上传队列：\n" + "\n".join(rejected),
+            )
+        if not files:
+            return
         album_id = self.current_album.album_id
-        files = [Path(path) for path in paths]
         self._run_job("准备上传媒体", lambda progress: self._upload_media(album_id, files, progress), lambda _: self.album_selected())
 
     def _upload_media(self, album_id: str, files: list[Path], progress: Callable[[int, str], None]) -> None:
