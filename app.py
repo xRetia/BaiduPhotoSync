@@ -444,6 +444,7 @@ class MainWindow(QMainWindow):
         self._initial_login_pending = False
         self._login_transition_in_progress = False
         self._startup_waiting_for_albums = False
+        self._startup_waiting_for_login_dialog = False
         self._startup_main_revealed = False
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
         migrate_legacy_windows_data()
@@ -1417,7 +1418,11 @@ class MainWindow(QMainWindow):
         self._open_qr_login()
 
     def _reveal_main_after_startup(self) -> None:
-        if self._startup_main_revealed:
+        if (
+            self._startup_main_revealed
+            or self._startup_waiting_for_albums
+            or self._startup_waiting_for_login_dialog
+        ):
             return
         self._startup_main_revealed = True
         if self._startup_loading is not None:
@@ -1482,6 +1487,9 @@ class MainWindow(QMainWindow):
         # QR dialog's finished signal does not treat it as an app-exit cancel.
         self._login_transition_in_progress = True
         qr_dialog.reject()
+        if self._initial_login_pending:
+            self._initial_login_pending = False
+            self._startup_waiting_for_albums = True
         self._begin_login(cookie_text, save_after_verify=dialog.should_remember_cookie())
 
     def _login_dialog_finished(self, dialog: WebLoginDialog) -> None:
@@ -1587,11 +1595,24 @@ class MainWindow(QMainWindow):
         self._qr_login_attempts = 0
         self._qr_candidate_cookie = ""
         dialog.verification_succeeded()
-        if self._initial_login_pending:
+        initial_login = self._initial_login_pending
+        if initial_login:
             self._initial_login_pending = False
             self._startup_waiting_for_albums = True
+            # Do not paint the main window behind the QR dialog.  It must wait
+            # for both the dialog's accepted close and the initial tree layout.
+            self._startup_waiting_for_login_dialog = True
         self._connected(client)
-        QTimer.singleShot(180, dialog.accept)
+        if initial_login:
+            QTimer.singleShot(180, lambda: self._finish_initial_qr_login(dialog))
+        else:
+            QTimer.singleShot(180, dialog.accept)
+
+    def _finish_initial_qr_login(self, dialog: WebLoginDialog) -> None:
+        if self._login_dialog is dialog:
+            dialog.accept()
+        self._startup_waiting_for_login_dialog = False
+        self._schedule_startup_reveal()
 
     def _connected(self, client: object) -> None:
         self._login_transition_in_progress = False
@@ -1703,6 +1724,7 @@ class MainWindow(QMainWindow):
         self._clear_connected_account()
         self._startup_main_revealed = False
         self._startup_waiting_for_albums = False
+        self._startup_waiting_for_login_dialog = False
         self._initial_login_pending = True
         self.hide()
         self.status.showMessage("已退出登录，请重新扫码登录。", 8000)
@@ -1744,14 +1766,19 @@ class MainWindow(QMainWindow):
             self._startup_waiting_for_albums = False
             # Queue the handoff after tree layout has settled, so the first
             # visible main-window frame already contains the album browser.
-            QTimer.singleShot(0, self._reveal_main_after_startup)
+            self._schedule_startup_reveal()
+
+    def _schedule_startup_reveal(self) -> None:
+        if self._startup_waiting_for_albums or self._startup_waiting_for_login_dialog:
+            return
+        QTimer.singleShot(0, self._reveal_main_after_startup)
 
     def _startup_album_load_failed(self, _error: str) -> None:
         # Network failure must not leave the application permanently behind the
         # splash.  Reveal a stable empty browser and leave the normal error state.
         if self._startup_waiting_for_albums:
             self._startup_waiting_for_albums = False
-            QTimer.singleShot(0, self._reveal_main_after_startup)
+            self._schedule_startup_reveal()
 
     def album_selected(self) -> None:
         items = self.album_tree.selectedItems()
