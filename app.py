@@ -14,7 +14,7 @@ import threading
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -61,8 +61,15 @@ from session_store import SessionStore, SessionStoreError
 from web_login import WEBENGINE_AVAILABLE, SessionKeepAlive, WebLoginDialog, WebLogoutDialog
 from sync_engine import FileCompareMode, PlanAction, SortField, SyncAction, SyncControl, SyncDirection, SyncEngine
 from video_compression import VideoCompressionError, VideoCompressionOptions, locate_ffmpeg, prepared_video_upload
-from ffmpeg_downloader import FFmpegDownloadError, download_directory, ensure_windows_ffmpeg
+from ffmpeg_downloader import FFmpegDownloadError, ensure_windows_ffmpeg
 from download_cache import DownloadCache
+from platform_services import (
+    app_data_directory,
+    clear_windows_registry_settings,
+    migrate_legacy_windows_data,
+    open_system_viewer,
+    remove_application_data,
+)
 
 
 class PlanTable(QTableWidget):
@@ -113,7 +120,7 @@ MIB = 1024 * 1024
 
 def download_cache_directory() -> Path:
     """Return the per-user persistent directory for reusable media downloads."""
-    return download_directory().parent / "download-cache"
+    return app_data_directory() / "download-cache"
 
 
 class Worker(QObject):
@@ -245,7 +252,7 @@ class CookieDialog(QDialog):
             """
             <p>粘贴已登录浏览器导出的 <code>photo.baidu.com</code> 与 <code>.baidu.com</code> Cookie 表格行或 JSON。Cookie 是登录凭据，请只在自己的受信任设备上使用，且不要发送给任何人。</p>
             <p>连接成功后，隐藏 WebView 会携带成功登录的 Cookie 并保持页面会话；默认不定时刷新。可在“高级设置 → 高级”启用“账号增强防掉线”，使其每 3 分钟访问 <code>https://photo.baidu.com/photo/web/home</code> 一次。相关状态会写入 DEBUG 日志。</p>
-            <p>Cookie 内容不会写入日志。保存成功的会话会受到当前 Windows 用户的 DPAPI 保护。</p>
+            <p>Cookie 内容不会写入日志。保存成功的会话会受到当前系统用户的安全凭据存储保护。</p>
             """
         )
         layout.addWidget(guide, 1)
@@ -254,9 +261,9 @@ class CookieDialog(QDialog):
         self.editor.setMinimumHeight(150)
         self.editor.setPlainText(saved_cookie)
         layout.addWidget(self.editor)
-        self.remember_cookie = QCheckBox("保存到当前 Windows 用户，下次自动登录")
+        self.remember_cookie = QCheckBox("保存到当前系统用户，下次自动登录")
         self.remember_cookie.setChecked(bool(saved_cookie))
-        self.remember_cookie.setToolTip("已保存的 Cookie 使用 Windows DPAPI 加密，且不会写入日志。")
+        self.remember_cookie.setToolTip("已保存的 Cookie 使用当前系统的安全凭据存储，且不会写入日志。")
         layout.addWidget(self.remember_cookie)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         _localize_dialog_buttons(buttons, "连接")
@@ -271,41 +278,13 @@ class CookieDialog(QDialog):
         return self.remember_cookie.isChecked()
 
 
-class PhotoPreviewDialog(QDialog):
-    """Display one downloaded photo without exposing the temporary cache path."""
-
-    def __init__(self, image_path: Path, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setWindowTitle(f"预览：{image_path.name}")
-        self.resize(980, 720)
-        layout = QVBoxLayout(self)
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        image_label = QLabel()
-        image_label.setAlignment(Qt.AlignCenter)
-        image_label.setMinimumSize(360, 260)
-        pixmap = QPixmap(str(image_path))
-        if pixmap.isNull():
-            image_label.setText("该文件已下载到临时目录，但当前程序无法渲染此图片格式。")
-            image_label.setWordWrap(True)
-        else:
-            # Keep the original pixels available through scrolling rather than
-            # downscaling a large source image to an unreadable preview.
-            image_label.setPixmap(pixmap)
-            image_label.resize(pixmap.size())
-        scroll.setWidget(image_label)
-        layout.addWidget(scroll, 1)
-        close_button = QPushButton("关闭")
-        close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button, alignment=Qt.AlignRight)
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(880, 520)
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
+        migrate_legacy_windows_data()
         self._restore_window_geometry()
         cache_mib = int(self.settings.value("download_cache_mib", DOWNLOAD_CACHE_DEFAULT_MIB))
         self.download_cache = DownloadCache(download_cache_directory(), cache_mib * MIB)
@@ -322,8 +301,6 @@ class MainWindow(QMainWindow):
         self._save_session_after_connect = False
         self._ffmpeg_download_dialog: QProgressDialog | None = None
         self._ffmpeg_downloading = False
-        self._preview_directory: Path | None = None
-        self._preview_dialog: PhotoPreviewDialog | None = None
         self._preview_pending = False
         self.albums: list[RemoteAlbum] = []
         self.current_album: RemoteAlbum | None = None
@@ -511,7 +488,7 @@ class MainWindow(QMainWindow):
         self.download_cache_limit_spin.setSingleStep(128)
         self.download_cache_limit_spin.setSuffix(" MiB")
         self.download_cache_limit_spin.setValue(int(self.settings.value("download_cache_mib", DOWNLOAD_CACHE_DEFAULT_MIB)))
-        self.download_cache_limit_spin.setToolTip("已下载或已预览的云端文件会保存在当前 Windows 用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。")
+        self.download_cache_limit_spin.setToolTip("已下载或已预览的云端文件会保存在当前系统用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。")
         cache_layout.addWidget(self.download_cache_limit_spin, 0, 1)
         self.download_cache_usage_label = QLabel(cache_group)
         self.download_cache_usage_label.setObjectName("muted")
@@ -619,9 +596,9 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.warning(
             self,
             "重置应用",
-            "此操作将删除本程序在本机留下的全部本地数据，且无法撤销：\n"
-            "• Windows 注册表中的设置与登录会话\n"
-            "• AppData 下的全部缓存与 FFmpeg（BaiduPhotoSync）\n"
+            "此操作将删除本程序在当前系统用户下留下的全部本地数据，且无法撤销：\n"
+            "• 应用设置与登录会话\n"
+            "• 应用数据目录下的全部缓存与 FFmpeg（BaiduPhotoSync）\n"
             "• 程序目录下的 error.log\n\n"
             "完成后需要重新扫码登录，正在进行的同步会被中断。确定继续吗？",
             QMessageBox.Yes | QMessageBox.No,
@@ -630,28 +607,15 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.Yes:
             return
         self.session_keepalive.stop()
-        # 1) 注册表：清空并删除应用键
+        # 1) Settings and platform-specific legacy keys.
         self.settings.clear()
         self.settings.sync()
+        clear_windows_registry_settings()
+        # 2) Per-user application data, including cache and FFmpeg.
         try:
-            import winreg
-
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Baidu", 0, winreg.KEY_ALL_ACCESS)
-            winreg.DeleteKey(key, "BaiduPhotoSync")
-            winreg.CloseKey(key)
-        except OSError:
-            pass
-        # 2) AppData：新的 BaiduPhotoSync 与历史遗留的 YikeSync
-        try:
-            from ffmpeg_downloader import download_directory
-
-            appdata = download_directory().parent.parent
-            for name in ("BaiduPhotoSync", "YikeSync"):
-                target = appdata / name
-                if target.exists():
-                    shutil.rmtree(target, ignore_errors=True)
+            remove_application_data()
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("重置时清理 AppData 失败：%s", exc)
+            LOGGER.warning("重置时清理应用数据失败：%s", exc)
         # 3) 程序目录下的 error.log
         try:
             if ERROR_LOG_PATH.exists():
@@ -673,6 +637,16 @@ class MainWindow(QMainWindow):
             return
         except VideoCompressionError:
             pass
+        if sys.platform != "win32":
+            self.compress_video_checkbox.blockSignals(True)
+            self.compress_video_checkbox.setChecked(False)
+            self.compress_video_checkbox.blockSignals(False)
+            QMessageBox.information(
+                self,
+                "缺少视频压缩组件",
+                "未检测到系统 FFmpeg。请使用系统包管理器安装 ffmpeg 和 ffprobe，并确认它们位于 PATH 后重新启用视频压缩。",
+            )
+            return
         dialog = QProgressDialog("正在准备视频压缩组件…", "", 0, 100, self)
         dialog.setWindowTitle("下载视频压缩组件")
         dialog.setWindowModality(Qt.ApplicationModal)
@@ -722,8 +696,8 @@ class MainWindow(QMainWindow):
         self.compress_video_checkbox.blockSignals(False)
         QMessageBox.warning(
             self,
-            "下载视频压缩组件失败",
-            "未能下载或校验 FFmpeg，视频压缩已关闭。请检查网络后重新勾选该选项。",
+            "准备视频压缩组件失败",
+            "未能准备 FFmpeg，视频压缩已关闭。Windows 请检查网络后重试；macOS/Linux 请确认系统 PATH 中存在 ffmpeg 和 ffprobe。",
         )
 
     def _load_ignored_albums(self) -> set[str]:
@@ -914,7 +888,7 @@ class MainWindow(QMainWindow):
         browser.setHtml(
             """
             <div style='max-width:920px; margin:12px auto; line-height:1.75;'>
-              <p style='color:#718096; margin-top:0;'>本地相册与一刻相册的桌面同步工具</p>
+              <p style='color:#718096; margin-top:0;'>&nbsp;</p>
 
               <div style='background:#fff4f4; border:2px solid #e5484d; border-radius:10px; padding:16px 20px; margin:18px 0;'>
                 <div style='color:#b4232a; font-size:18pt; font-weight:800; text-align:center;'>本软件免费使用，禁止收费倒卖本软件，软件仅供学习请于24小时内删除</div>
@@ -922,7 +896,7 @@ class MainWindow(QMainWindow):
 
               <h2 style='color:#1d63bf;'>登录与账户安全</h2>
               <p>首次打开或本机登录会话失效时，程序会展示百度官方二维码。请使用百度 App 或一刻相册 App 扫码并在手机确认。扫码后程序会自动在窗口内验证一刻相册权限；如遇网络抖动，会自动再尝试一次。验证成功才会进入主界面，失败时二维码保留在当前窗口，可刷新后重试。</p>
-              <p>已验证的登录信息使用 Windows DPAPI 加密保存，仅供当前 Windows 用户使用。退出登录会打开临时网页，请在右上角账户菜单完成百度官方退出；程序确认网页会话失效后才会清除本机登录信息。</p>
+              <p>已验证的登录信息使用当前系统的安全凭据存储保存，仅供当前系统用户使用。退出登录会打开临时网页，请在右上角账户菜单完成百度官方退出；程序确认网页会话失效后才会清除本机登录信息。</p>
 
               <h2 style='color:#1d63bf;'>同步与文件对比</h2>
               <p>选择本地根目录后，直接子文件夹会映射为云端相册。请先点击“比较并生成计划”，核对右侧计划后再执行。默认“智能”文件对比会识别异名同内容副本，并将云端同名压缩视频视为已同步，从而保留本地高清原件而不重复上传。</p>
@@ -934,7 +908,7 @@ class MainWindow(QMainWindow):
               <h2 style='color:#1d63bf;'>关于</h2>
               <table cellpadding='7' cellspacing='0' style='border-collapse:collapse; width:100%; border:1px solid #dbe4ef;'>
                 <tr style='background:#f4f7fb;'><td><b>软件名称</b></td><td>一刻同步</td></tr>
-                <tr><td><b>运行环境</b></td><td>Windows 桌面程序</td></tr>
+                <tr><td><b>运行环境</b></td><td>Windows、macOS 与 Linux 桌面程序</td></tr>
                 <tr style='background:#f4f7fb;'><td><b>登录方式</b></td><td>百度官方二维码网页登录</td></tr>
                 <tr><td><b>同步说明</b></td><td>使用非官方接口实现；接口或会话格式变化时可能需要更新。</td></tr>
                 <tr style='background:#f4f7fb;'><td><b>反馈前建议</b></td><td>在“高级设置 → 高级”启用 DEBUG 日志，并保留错误发生时间和操作步骤。</td></tr>
@@ -1155,6 +1129,17 @@ class MainWindow(QMainWindow):
             return
         except VideoCompressionError:
             pass
+        if sys.platform != "win32":
+            self.compress_video_checkbox.blockSignals(True)
+            self.compress_video_checkbox.setChecked(False)
+            self.compress_video_checkbox.blockSignals(False)
+            self.settings.setValue("compress_oversize_videos", False)
+            QMessageBox.information(
+                self,
+                "缺少视频压缩组件",
+                "未检测到系统 FFmpeg，已关闭视频压缩。请安装 ffmpeg 和 ffprobe 并确认它们位于 PATH 后重新启用。",
+            )
+            return
         answer = QMessageBox.question(
             self,
             "缺少视频压缩组件",
@@ -1195,7 +1180,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "缺少二维码登录组件",
-                "当前程序包没有 Qt WebEngine，无法展示百度二维码。请使用包含 PySide6-Addons 的完整 Windows 安装包。",
+                "当前程序包没有 Qt WebEngine，无法展示百度二维码。请使用包含 PySide6-Addons 的完整安装包。",
             )
             return
         if self._login_dialog is not None:
@@ -1321,9 +1306,9 @@ class MainWindow(QMainWindow):
                 saved = True
             except SessionStoreError as exc:
                 LOGGER.warning("登录会话未持久化：%s", exc)
-                self.status.showMessage("账户已连接，但 Windows DPAPI 保存失败；会话仅在本次运行有效。", 8000)
+                self.status.showMessage("账户已连接，但系统凭据存储保存失败；会话仅在本次运行有效。", 8000)
         if saved:
-            self.status.showMessage("账户已连接；扫码会话已使用 Windows DPAPI 加密保存。", 5000)
+            self.status.showMessage("账户已连接；扫码会话已使用系统安全凭据存储保存。", 5000)
         elif not self._pending_cookie_text:
             self.status.showMessage("账户已连接；会话仅在内存中使用。", 5000)
         self._pending_cookie_text = ""
@@ -1695,7 +1680,6 @@ class MainWindow(QMainWindow):
         if self._preview_pending:
             self.status.showMessage("正在准备当前照片预览，请稍候。", 4000)
             return
-        self._discard_preview_cache()
         self._preview_pending = True
         self.media_preview.setEnabled(False)
         album_id = self.current_album.album_id
@@ -1731,31 +1715,19 @@ class MainWindow(QMainWindow):
         if not image_path.is_file():
             self._preview_photo_download_failed("预览文件不存在。")
             return
-        dialog = PhotoPreviewDialog(image_path, self)
-        self._preview_dialog = dialog
-        dialog.finished.connect(lambda _result, current=dialog: self._preview_dialog_finished(current))
-        dialog.show()
-        self.status.showMessage(f"已打开预览：{image_path.name}", 5000)
+        if not open_system_viewer(image_path):
+            QMessageBox.warning(self, "无法打开系统查看器", "系统未能启动该照片的默认查看器。请检查系统文件关联后重试。")
+            return
+        self.status.showMessage(f"已请求系统查看器打开：{image_path.name}", 5000)
 
     def _preview_photo_download_failed(self, _error: str) -> None:
         self._preview_pending = False
         self.media_preview.setEnabled(self.client is not None)
-        self._discard_preview_cache()
         self.status.showMessage("照片预览下载失败，请检查网络或重新登录后再试。", 8000)
 
-    def _preview_dialog_finished(self, dialog: PhotoPreviewDialog) -> None:
-        if self._preview_dialog is dialog:
-            self._preview_dialog = None
-            dialog.deleteLater()
-            self._discard_preview_cache()
-
     def _discard_preview_cache(self) -> None:
-        if self._preview_dialog is not None:
-            dialog = self._preview_dialog
-            self._preview_dialog = None
-            dialog.close()
-            dialog.deleteLater()
-        self._preview_directory = None
+        """Retained lifecycle hook; preview files now stay in bounded media cache."""
+        return
 
     def delete_media(self) -> None:
         if not self.client or not self.current_album:

@@ -8,22 +8,25 @@ A desktop application for synchronizing local photo folders with Baidu Photo alb
 
 | Area | Capability |
 | --- | --- |
-| Album browser | Browse cloud albums and media, then create, rename, delete, upload, download, or preview a selected photo from one desktop interface. |
+| Album browser | Browse cloud albums and media, then create, rename, delete, upload, download, or open a selected photo in the desktop's configured default viewer. |
 | Sync planner | Map local folders to cloud albums, compare content, produce an explicit plan, and control execution with pause, resume, and stop actions. |
 | Safe defaults | Keep destructive synchronization disabled by default and surface file conflicts before any transfer begins. |
 | Video handling | Optionally create a temporary upload copy for oversize video files while keeping the local original unchanged. |
-| Account session | Use an in-app Baidu QR-code or pasted-Cookie sign-in flow, keep the validated session scoped to the current Windows user, and retain a private hidden session page while the app is open. Optional enhanced protection reloads it every three minutes. |
-| Windows release | Use the standard executable; it downloads and validates FFmpeg only when video compression is enabled. |
+| Account session | Use an in-app Baidu QR-code or pasted-Cookie sign-in flow, keep the validated session scoped to the current system user, and retain a private hidden session page while the app is open. Optional enhanced protection reloads it every three minutes. |
+| Native releases | Build native Windows, macOS, and Linux artifacts from their corresponding operating-system runners. |
 
 ## Download and Use
 
-Download the newest Windows x64 executable from [GitHub Releases](https://github.com/xRetia/BaiduPhotoSync/releases/latest). The standard build is distributed as a self-contained executable.
+Download the matching native artifact from [GitHub Releases](https://github.com/xRetia/BaiduPhotoSync/releases/latest). Windows is a self-contained executable. macOS releases are application bundles packaged as ZIP files, and Linux releases are extracted application-directory archives.
 
 | Asset | Recommended for | FFmpeg behavior |
 | --- | --- | --- |
-| `BaiduPhotoSync-<version>-Windows-x64.exe` | All supported Windows users. | The executable downloads and validates FFmpeg only after video compression is enabled. |
+| `BaiduPhotoSync-<version>-Windows-x64.exe` | Windows x64 users. | Downloads and validates FFmpeg only after video compression is enabled. |
+| `BaiduPhotoSync-<version>-macOS-x64.app.zip` | Intel macOS users. | Uses `ffmpeg` and `ffprobe` from `PATH` when video compression is enabled. |
+| `BaiduPhotoSync-<version>-macOS-arm64.app.zip` | Apple Silicon macOS users. | Uses `ffmpeg` and `ffprobe` from `PATH` when video compression is enabled. |
+| `BaiduPhotoSync-<version>-Linux-x86_64.tar.gz` | Linux x86_64 desktop users. | Uses `ffmpeg` and `ffprobe` from `PATH` when video compression is enabled. |
 
-Run the downloaded `.exe` file, select **Sign In**, and complete the QR-code confirmation in the official Baidu page. After the account is connected, select a local root directory in **Sync Center**, create a plan, inspect the listed actions, and run only the confirmed plan.
+Run the downloaded application, select **Sign In**, and complete the QR-code confirmation in the official Baidu page. After the account is connected, select a local root directory in **Sync Center**, create a plan, inspect the listed actions, and run only the confirmed plan.
 
 ## Screenshots
 
@@ -57,19 +60,21 @@ The application is designed around an inspect-first workflow. Connect an account
 
 ## Video Compression and FFmpeg
 
-Video compression is optional and disabled by default. When enabled, the application prepares a temporary compressed upload copy for an oversize video and retains the original local file. The Windows executable downloads the required FFmpeg tools only after the option is used. The downloadable FFmpeg archive is obtained from the official BtbN build release and checked against its published SHA-256 checksum before installation.[1]
+Video compression is optional and disabled by default. When enabled, the application prepares a temporary compressed upload copy for an oversize video and retains the original local file. The Windows executable downloads the required FFmpeg tools only after the option is used; the downloadable archive is obtained from the official BtbN build release and checked against its published SHA-256 checksum before installation.[1] On macOS and Linux, install `ffmpeg` and `ffprobe` through the system package manager and ensure both commands are available in `PATH` before enabling compression.
 
 ## Privacy and Data Handling
 
-The QR-code flow is displayed in the application rather than requiring a separate browser; a pasted-Cookie sign-in option is also available inside that flow. The preview command downloads one selected photo into the current Windows user's reusable application cache and displays it in an in-app window. Repeated downloads and previews can reuse verified cached media. Advanced Settings exposes the cache limit and a manual clearing command; once the limit is exceeded, least-recently-used media is evicted automatically. A validated local sign-in session is kept for the current Windows user, and the project does not intend to write cookies to application logs. While the application is open, a hidden private WebView keeps the Baidu Photo session page loaded and can save a rotated complete session back to the encrypted local store. The optional **Enhanced Account Keepalive** setting reloads `https://photo.baidu.com/photo/web/home` every three minutes; it is disabled by default because the page itself maintains its session through JavaScript. The hidden view stops on re-login, verified sign-out, application reset, and normal shutdown. Treat any local session as sensitive and use the application only on a trusted Windows account.
+The QR-code flow is displayed in the application rather than requiring a separate browser; a pasted-Cookie sign-in option is also available inside that flow. The preview command downloads one selected photo into the current system user's reusable application cache and asks the operating system to open it in the configured default viewer. Repeated downloads and previews can reuse verified cached media. Advanced Settings exposes the cache limit and a manual clearing command; once the limit is exceeded, least-recently-used media is evicted automatically. A validated local sign-in session is kept in the current system user's secure credential store: Windows DPAPI on Windows, and the available system keychain service on macOS/Linux. The application does not write cookies to logs and does not use a plaintext fallback when a secure store is unavailable. While the application is open, a hidden private WebView keeps the Baidu Photo session page loaded and can save a rotated complete session back to the encrypted local store. The optional **Enhanced Account Keepalive** setting reloads `https://photo.baidu.com/photo/web/home` every three minutes; it is disabled by default because the page itself maintains its session through JavaScript. The hidden view stops on re-login, verified sign-out, application reset, and normal shutdown. Treat any local session as sensitive and use the application only on a trusted system account.
 
 ## Build from Source
 
-The application restores a valid prior window size and position for the current Windows user, while moving the window back onto a visible display if monitor arrangements change. The repository includes a GitHub Actions workflow that creates the standard Windows x64 executable from the tagged source. For a local Windows build, install Python, install the dependencies in `requirements.txt` together with PyInstaller, and invoke the release build script. The default transfer settings use four upload clients, four download clients, and eight concurrent album-media reads; all three can be adjusted in Advanced Settings. The workflow uses the vendored `pybaiduphoto` implementation and packages the application assets, the embedded browser runtime, and the required Python modules.
+The application restores a valid prior window size and position for the current system user, while moving the window back onto a visible display if monitor arrangements change. The repository includes a GitHub Actions workflow that creates native Windows, macOS, and Linux artifacts from tagged source. For a local build, install Python and invoke the platform-appropriate release script. The default transfer settings use four upload clients, four download clients, and eight concurrent album-media reads; all three can be adjusted in Advanced Settings. The workflow uses the vendored `pybaiduphoto` implementation and packages the application assets, embedded browser runtime, and required Python modules.
 
 | Build option | Command | Output |
 | --- | --- | --- |
 | Windows x64 | `powershell -ExecutionPolicy Bypass -File scripts\build-windows-release.ps1` | `BaiduPhotoSync-<version>-Windows-x64.exe` |
+| macOS x64 / arm64 | `bash scripts/build-unix-release.sh <version>` | `BaiduPhotoSync-<version>-macOS-<architecture>.app.zip` |
+| Linux x86_64 | `bash scripts/build-unix-release.sh <version>` | `BaiduPhotoSync-<version>-Linux-x86_64.tar.gz` |
 
 ## Support and Responsible Use
 
@@ -78,3 +83,9 @@ This is an independent desktop client. It is not an official Baidu product. Plea
 ## References
 
 [1] [BtbN FFmpeg-Builds release assets](https://github.com/BtbN/FFmpeg-Builds/releases/latest)
+
+[2] [Qt: QDesktopServices](https://doc.qt.io/qt-6/qdesktopservices.html)
+
+[3] [Python Keyring documentation](https://keyring.readthedocs.io/en/latest/)
+
+[4] [PyInstaller operating mode](https://pyinstaller.org/en/stable/operating-mode.html)

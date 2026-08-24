@@ -1,4 +1,4 @@
-name: Windows Release
+name: Desktop Release
 
 on:
   push:
@@ -15,9 +15,29 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build and publish the Windows x64 executable
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.display_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+            display_name: Windows x64 executable
+            artifact_name: BaiduPhotoSync-${{ github.ref_name }}-Windows-x64
+          - os: macos-13
+            target: unix
+            display_name: macOS x64 app
+            artifact_name: BaiduPhotoSync-${{ github.ref_name }}-macOS-x64
+          - os: macos-14
+            target: unix
+            display_name: macOS arm64 app
+            artifact_name: BaiduPhotoSync-${{ github.ref_name }}-macOS-arm64
+          - os: ubuntu-22.04
+            target: unix
+            display_name: Linux x86_64 archive
+            artifact_name: BaiduPhotoSync-${{ github.ref_name }}-Linux-x86_64
+    runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -32,39 +52,86 @@ jobs:
 
       - name: Resolve release version
         id: version
-        shell: pwsh
+        shell: bash
         run: |
-          if ("${{ github.event_name }}" -eq "push") {
-            $version = "${{ github.ref_name }}".TrimStart("v")
-          } else {
-            $version = "${{ inputs.version }}"
-          }
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "A release version is required."
-          }
-          "value=$version" >> $env:GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            version="${{ github.ref_name }}"
+            version="${version#v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          if [[ -z "$version" ]]; then
+            echo "A release version is required." >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build Windows x64 executable
+        if: matrix.target == 'windows'
         shell: pwsh
         run: scripts\build-windows-release.ps1 -Version "${{ steps.version.outputs.value }}"
+
+      - name: Build native macOS or Linux package
+        if: matrix.target == 'unix'
+        shell: bash
+        run: bash scripts/build-unix-release.sh "${{ steps.version.outputs.value }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64
-          path: release/BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe
+          name: ${{ matrix.artifact_name }}
+          path: release/*
           if-no-files-found: error
 
-      - name: Create GitHub Release
-        shell: pwsh
+  release:
+    name: Publish multi-platform GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve release version
+        id: version
+        shell: bash
         run: |
-          $tag = "v${{ steps.version.outputs.value }}"
-          $title = "Baidu Photo Sync $tag"
-          $notes = @"
-          ## Windows x64 executable
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            version="${{ github.ref_name }}"
+            version="${version#v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
-          `BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe` is the standard self-contained Windows build. It downloads and validates FFmpeg only when video compression is enabled.
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
 
-          Run the executable, complete QR-code sign-in, build a sync plan, and review it before execution.
-          "@
-          gh release create $tag release\BaiduPhotoSync-${{ steps.version.outputs.value }}-Windows-x64.exe --repo "${{ github.repository }}" --title $title --notes $notes --verify-tag
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          tag="v${{ steps.version.outputs.value }}"
+          shopt -s nullglob
+          assets=(release-assets/*)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release assets were downloaded." >&2
+            exit 1
+          fi
+          notes_file="release-notes.md"
+          cat > "$notes_file" <<'EOF'
+          ## Desktop builds
+
+          This release contains native Windows, macOS, and Linux artifacts when their corresponding build jobs succeed.
+
+          - **Windows x64:** self-contained executable; optional FFmpeg is downloaded and checksum-verified only when video compression is enabled.
+          - **macOS x64 / arm64:** native application bundles; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
+          - **Linux x86_64:** native extracted application directory; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
+
+          Photos are downloaded through the bounded local cache and opened in the desktop's configured default viewer.
+          EOF
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --repo "${{ github.repository }}" --title "Baidu Photo Sync $tag" --notes-file "$notes_file" --verify-tag
+          fi

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from platform_services import app_data_directory
+
 
 RELEASE_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download"
 ARCHIVE_NAME = "ffmpeg-master-latest-win64-gpl.zip"
@@ -32,10 +34,8 @@ class FFmpegDownloadResult:
 
 
 def download_directory() -> Path:
-    """Return a per-user writable location; never write into Program Files."""
-    appdata = os.environ.get("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "BaiduPhotoSync" / "ffmpeg"
+    """Return a per-user writable application-data location for FFmpeg tools."""
+    return app_data_directory() / "ffmpeg"
 
 
 def _emit(progress: ProgressCallback | None, value: int, text: str) -> None:

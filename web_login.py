@@ -325,7 +325,7 @@ class WebLoginDialog(_BaiduCookieDialog):
         layout = QVBoxLayout(self)
 
         if not WEBENGINE_AVAILABLE:
-            layout.addWidget(QLabel("当前安装包缺少二维码登录组件。请使用完整 Windows 安装包。"))
+            layout.addWidget(QLabel("当前安装包缺少二维码登录组件。请使用包含 Qt WebEngine 的完整安装包。"))
             layout.addStretch(1)
             close_button = QPushButton("关闭")
             close_button.clicked.connect(self.reject)
