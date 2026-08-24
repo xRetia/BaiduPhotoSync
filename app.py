@@ -442,6 +442,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(880, 520)
         self._startup_loading = startup_loading
         self._initial_login_pending = False
+        self._login_transition_in_progress = False
         self._startup_waiting_for_albums = False
         self._startup_main_revealed = False
         self.settings = QSettings("Baidu", "BaiduPhotoSync")
@@ -1477,17 +1478,37 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Cookie 为空", "请粘贴完整的 Cookie 后再连接。")
             return
         # Close the QR dialog first so a failed pasted session can reopen a fresh
-        # QR dialog rather than raising a hidden one.
+        # QR dialog rather than raising a hidden one.  Mark this handoff so the
+        # QR dialog's finished signal does not treat it as an app-exit cancel.
+        self._login_transition_in_progress = True
         qr_dialog.reject()
         self._begin_login(cookie_text, save_after_verify=dialog.should_remember_cookie())
 
     def _login_dialog_finished(self, dialog: WebLoginDialog) -> None:
-        if self._login_dialog is dialog:
-            self._login_dialog = None
-            self._qr_candidate_cookie = ""
-            self._qr_login_attempts = 0
-            self._pending_cookie_text = ""
-            self._save_session_after_connect = False
+        if self._login_dialog is not dialog:
+            return
+        cancelled = dialog.result() == QDialog.Rejected
+        self._login_dialog = None
+        self._qr_candidate_cookie = ""
+        self._qr_login_attempts = 0
+        self._pending_cookie_text = ""
+        self._save_session_after_connect = False
+        # A cancelled first-login dialog otherwise leaves a hidden MainWindow
+        # alive and a Python process with no visible windows.  During a pasted
+        # Cookie handoff the QR dialog intentionally closes, so do not exit.
+        if (
+            cancelled
+            and self.client is None
+            and not self.isVisible()
+            and not self._login_transition_in_progress
+        ):
+            QTimer.singleShot(0, self._exit_after_login_cancelled)
+
+    def _exit_after_login_cancelled(self) -> None:
+        self.close()
+        application = QApplication.instance()
+        if application is not None:
+            application.quit()
 
     def _verify_qr_candidate(self, dialog: WebLoginDialog, cookie_text: str) -> None:
         self._qr_candidate_cookie = cookie_text
@@ -1533,6 +1554,7 @@ class MainWindow(QMainWindow):
         return client
 
     def _login_failed(self, _error: str) -> None:
+        self._login_transition_in_progress = False
         self.session_keepalive.stop()
         self.session_store.clear()
         self._pending_cookie_text = ""
@@ -1572,6 +1594,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(180, dialog.accept)
 
     def _connected(self, client: object) -> None:
+        self._login_transition_in_progress = False
         self.client = client  # type: ignore[assignment]
         validated_cookie_text = self._pending_cookie_text
         saved = False
@@ -1673,8 +1696,17 @@ class MainWindow(QMainWindow):
             )
             self.status.showMessage("网页退出状态无法确认，本机登录会话仍保留。", 6000)
             return
+        self._return_to_login_after_logout()
+
+    def _return_to_login_after_logout(self) -> None:
+        """Clear the authenticated UI, hide it, and begin a fresh login flow."""
         self._clear_connected_account()
-        self.status.showMessage("已验证百度网页登录会话失效，并已清除本机登录信息。", 8000)
+        self._startup_main_revealed = False
+        self._startup_waiting_for_albums = False
+        self._initial_login_pending = True
+        self.hide()
+        self.status.showMessage("已退出登录，请重新扫码登录。", 8000)
+        self._open_qr_login()
 
     def refresh_albums(self, on_failure: Callable[[str], None] | None = None) -> None:
         if not self.client:

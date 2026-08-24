@@ -14,6 +14,12 @@ on:
 permissions:
   contents: write
 
+# Keep only the newest build for a tag.  Retagging a release should not leave
+# older queued macOS jobs able to block or later overwrite the same assets.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build ${{ matrix.display_name }}
@@ -25,7 +31,9 @@ jobs:
             target: windows
             display_name: Windows x64 executable
             artifact_name: BaiduPhotoSync-${{ github.ref_name }}-Windows-x64
-          - os: macos-13
+          # macos-13 was retiring and could remain queued indefinitely.
+          # macos-15-intel is the supported GitHub-hosted x86_64 macOS label.
+          - os: macos-15-intel
             target: unix
             display_name: macOS x64 app
             artifact_name: BaiduPhotoSync-${{ github.ref_name }}-macOS-x64
@@ -128,9 +136,11 @@ jobs:
           - **macOS x64 / arm64:** native application bundles; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
           - **Linux x86_64:** native extracted application directory; install system `ffmpeg` and `ffprobe` in `PATH` only when video compression is needed.
 
-          ## v2.0.0 highlights
+          ## v2.1.0 highlights
 
-          - Album browsing offers remembered **details** and **thumbnail** modes. Signed `thumburl` images power thumbnails and photo preview, while **Download** continues to save the original file.
+          - Closing the first-login dialog now exits cleanly instead of leaving a background process with no visible window. Logging out hides the main window and returns to a fresh sign-in dialog.
+          - Manual upload selection is limited to supported photo and video formats, with unsupported or empty files skipped before upload begins.
+          - Album browser startup waits for the initial cloud-album list before showing the main window, reducing native-window flash; media list containers use a borderless presentation.
           - Windows FFmpeg installation replaces prior tool files safely and reports an actionable Windows-only message if the directory is occupied.
           - FFmpeg guidance is platform-specific: Windows can download a verified component, while macOS and Linux use system `ffmpeg` and `ffprobe` from `PATH`.
 
