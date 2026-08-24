@@ -308,6 +308,7 @@ class ElidedLabel(QLabel):
 class MediaThumbnailDelegate(QStyledItemDelegate):
     """Render a fixed Explorer-like tile: centered image canvas and one text baseline."""
 
+    THUMBNAIL_PIXMAP_ROLE = Qt.UserRole + 17
     IMAGE_BOX = QSize(160, 160)
     TEXT_HEIGHT = 36
     HORIZONTAL_MARGIN = 8
@@ -317,17 +318,28 @@ class MediaThumbnailDelegate(QStyledItemDelegate):
         rect = option.rect.adjusted(2, 2, -2, -2)
         selected = bool(option.state & QStyle.State_Selected)
         if selected:
-            painter.fillRect(rect, option.palette.highlight())
+            # Keep the familiar lightweight Explorer-like focus treatment:
+            # a soft tint and rounded outline instead of a full opaque tile.
+            selection_rect = rect.adjusted(5, 4, -5, -4)
+            highlight = option.palette.color(QPalette.Highlight)
+            painter.setPen(highlight)
+            painter.setBrush(QColor(highlight.red(), highlight.green(), highlight.blue(), 34))
+            painter.drawRoundedRect(selection_rect, 6, 6)
 
-        icon = index.data(Qt.DecorationRole)
-        if isinstance(icon, QIcon) and not icon.isNull():
-            pixmap = icon.pixmap(self.IMAGE_BOX)
+        source_pixmap = index.data(self.THUMBNAIL_PIXMAP_ROLE)
+        if isinstance(source_pixmap, QPixmap) and not source_pixmap.isNull():
+            pixmap = source_pixmap.scaled(self.IMAGE_BOX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        else:
+            icon = index.data(Qt.DecorationRole)
+            pixmap = icon.pixmap(self.IMAGE_BOX) if isinstance(icon, QIcon) and not icon.isNull() else QPixmap()
             if not pixmap.isNull():
-                if pixmap.size().width() > self.IMAGE_BOX.width() or pixmap.size().height() > self.IMAGE_BOX.height():
-                    pixmap = pixmap.scaled(self.IMAGE_BOX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                image_x = rect.x() + (rect.width() - pixmap.width()) // 2
-                image_y = rect.y() + max(0, (self.IMAGE_BOX.height() - pixmap.height()) // 2)
-                painter.drawPixmap(image_x, image_y, pixmap)
+                pixmap = pixmap.scaled(self.IMAGE_BOX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if not pixmap.isNull():
+            # Center every source shape inside the same image canvas.  Names
+            # remain below it on a single shared baseline.
+            image_x = rect.x() + (rect.width() - pixmap.width()) // 2
+            image_y = rect.y() + (self.IMAGE_BOX.height() - pixmap.height()) // 2
+            painter.drawPixmap(image_x, image_y, pixmap)
 
         text_rect = rect.adjusted(
             self.HORIZONTAL_MARGIN,
@@ -338,9 +350,7 @@ class MediaThumbnailDelegate(QStyledItemDelegate):
         text_rect.setHeight(self.TEXT_HEIGHT)
         full_name = str(index.data(Qt.DisplayRole) or "")
         elided_name = option.fontMetrics.elidedText(full_name, Qt.ElideRight, max(0, text_rect.width()))
-        painter.setPen(
-            option.palette.color(QPalette.HighlightedText if selected else QPalette.Text)
-        )
+        painter.setPen(option.palette.color(QPalette.Text))
         painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextSingleLine, elided_name)
         painter.restore()
 
@@ -1738,7 +1748,7 @@ class MainWindow(QMainWindow):
             # item becomes visible in thumbnail mode.
             thumbnail = QListWidgetItem(icon, item.name)
             thumbnail.setData(Qt.UserRole, item.fsid)
-            thumbnail.setSizeHint(QSize(196, 208))
+            thumbnail.setSizeHint(QSize(1, 208))
             thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n滚动到可见区域时加载缩略图；双击使用缩略图预览。")
             self.media_thumbnails.addItem(thumbnail)
         if self.media_view_mode == "thumbnails":
@@ -1770,11 +1780,24 @@ class MainWindow(QMainWindow):
         self.media_selected_name.setToolTip("")
         self.media_selected_name.setVisible(False)
 
+    def _update_thumbnail_grid_size(self) -> None:
+        viewport_width = self.media_thumbnails.viewport().width()
+        if viewport_width <= 0:
+            return
+        preferred_width = 196
+        spacing = self.media_thumbnails.spacing()
+        columns = max(1, (viewport_width + spacing) // (preferred_width + spacing))
+        cell_width = max(170, (viewport_width - spacing * (columns - 1)) // columns)
+        target_size = QSize(cell_width, 208)
+        if self.media_thumbnails.gridSize() != target_size:
+            self.media_thumbnails.setGridSize(target_size)
+
     def eventFilter(self, watched: QObject, event) -> bool:  # type: ignore[override]
         if watched is getattr(self, "media_thumbnails", None).viewport() and event.type() in {
             QEvent.Resize,
             QEvent.Show,
         }:
+            self._update_thumbnail_grid_size()
             self._schedule_visible_thumbnail_load()
         return super().eventFilter(watched, event)
 
@@ -1885,6 +1908,7 @@ class MainWindow(QMainWindow):
                 continue
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
+                list_item.setData(MediaThumbnailDelegate.THUMBNAIL_PIXMAP_ROLE, pixmap)
                 list_item.setIcon(QIcon(pixmap))
                 self._thumbnail_loaded_fsids.add(fsid)
                 rendered_fsids.add(fsid)
