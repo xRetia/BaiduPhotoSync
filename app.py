@@ -440,6 +440,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(880, 520)
+        # During production startup, create and restore the native main window
+        # off-screen.  The loading surface remains the only visible top-level
+        # window until the first fully laid-out main frame is ready.
+        if startup_loading is not None:
+            self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self._startup_loading = startup_loading
         self._initial_login_pending = False
         self._login_transition_in_progress = False
@@ -1425,13 +1430,21 @@ class MainWindow(QMainWindow):
         ):
             return
         self._startup_main_revealed = True
-        if self._startup_loading is not None:
-            self._startup_loading.set_stage(100, "账号验证成功")
+        loading = self._startup_loading
+        if loading is not None:
+            loading.set_stage(100, "账号验证成功")
+        # Let the main window receive its native show/resize events while it is
+        # fully transparent and still covered by the loading surface.  On
+        # Windows this prevents the blank native frame from flashing between
+        # the splash and the first painted application frame.
+        self.setWindowOpacity(0.0)
+        self.setAttribute(Qt.WA_DontShowOnScreen, False)
         self.show()
         QApplication.instance().processEvents()
-        if self._startup_loading is not None:
-            self._startup_loading.close()
+        if loading is not None:
+            loading.close()
             self._startup_loading = None
+        self.setWindowOpacity(1.0)
         QTimer.singleShot(0, self._check_ffmpeg_at_startup)
 
     def _restore_or_prompt_login(self) -> None:
