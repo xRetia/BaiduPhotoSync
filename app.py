@@ -14,7 +14,7 @@ from pathlib import Path
 import threading
 from typing import Callable
 
-from PySide6.QtCore import QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QSettings, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -118,7 +118,7 @@ VIDEO_MEDIA_ICON_PATH = APP_ROOT / "assets" / "video_media.svg"
 ERROR_LOG_PATH = Path.cwd() / "error.log"
 DOWNLOAD_CACHE_DEFAULT_MIB = 1024
 MIB = 1024 * 1024
-THUMBNAIL_DOWNLOAD_WORKERS = 4
+LAZY_THUMBNAIL_BATCH_SIZE = 18
 
 
 def download_cache_directory() -> Path:
@@ -800,6 +800,16 @@ class MainWindow(QMainWindow):
         self.media_thumbnails.setGridSize(QSize(176, 205))
         self.media_thumbnails.setSpacing(8)
         self.media_thumbnails.itemDoubleClicked.connect(self._preview_media_from_thumbnail)
+        self._thumbnail_load_in_progress = False
+        self._thumbnail_request_generation = 0
+        self._thumbnail_loaded_fsids: set[str] = set()
+        self._thumbnail_failed_fsids: set[str] = set()
+        self._thumbnail_load_timer = QTimer(self)
+        self._thumbnail_load_timer.setSingleShot(True)
+        self._thumbnail_load_timer.timeout.connect(self._load_visible_thumbnails)
+        self.media_thumbnails.verticalScrollBar().valueChanged.connect(self._schedule_visible_thumbnail_load)
+        self.media_thumbnails.horizontalScrollBar().valueChanged.connect(self._schedule_visible_thumbnail_load)
+        self.media_thumbnails.viewport().installEventFilter(self)
         self.media_views = QStackedWidget()
         self.media_views.addWidget(self.media_table)
         self.media_views.addWidget(self.media_thumbnails)
@@ -1494,6 +1504,9 @@ class MainWindow(QMainWindow):
 
     def _media_loaded(self, media: object) -> None:
         self.current_media = media  # type: ignore[assignment]
+        self._thumbnail_request_generation += 1
+        self._thumbnail_loaded_fsids.clear()
+        self._thumbnail_failed_fsids.clear()
         self.media_table.setRowCount(0)
         self.media_thumbnails.clear()
         for row, item in enumerate(self.current_media):
@@ -1507,17 +1520,24 @@ class MainWindow(QMainWindow):
             cells = [name, type_item, QTableWidgetItem(self._format_size(item.size)), QTableWidgetItem(self._format_time(item.modified_at)), QTableWidgetItem("云端媒体")]
             for column, cell in enumerate(cells):
                 self.media_table.setItem(row, column, cell)
+            # Placeholder icon only.  No thumburl request is issued until this
+            # item becomes visible in thumbnail mode.
             thumbnail = QListWidgetItem(icon, item.name)
             thumbnail.setData(Qt.UserRole, item.fsid)
-            thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n双击使用缩略图预览；下载按钮保存原图。")
+            thumbnail.setToolTip(f"{item.name}\n{media_type} · {self._format_size(item.size)}\n滚动到可见区域时加载缩略图；双击使用缩略图预览。")
             self.media_thumbnails.addItem(thumbnail)
-        if self.current_media:
-            self._run_job(
-                "正在加载相册缩略图",
-                lambda progress: self._load_media_thumbnails(list(self.current_media), progress),
-                self._media_thumbnails_loaded,
-                self._media_thumbnails_failed,
-            )
+        if self.media_view_mode == "thumbnails":
+            self._schedule_visible_thumbnail_load()
+        else:
+            self._thumbnail_load_timer.stop()
+
+    def eventFilter(self, watched: QObject, event) -> bool:  # type: ignore[override]
+        if watched is getattr(self, "media_thumbnails", None).viewport() and event.type() in {
+            QEvent.Resize,
+            QEvent.Show,
+        }:
+            self._schedule_visible_thumbnail_load()
+        return super().eventFilter(watched, event)
 
     def _set_media_view_mode(self, _index: int) -> None:
         mode = str(self.media_view_mode_combo.currentData())
@@ -1525,43 +1545,72 @@ class MainWindow(QMainWindow):
         if hasattr(self, "media_views"):
             self.media_views.setCurrentIndex(1 if self.media_view_mode == "thumbnails" else 0)
         self.settings.setValue("media_browser_view_mode", self.media_view_mode)
+        if self.media_view_mode == "thumbnails":
+            self._schedule_visible_thumbnail_load()
+        else:
+            self._thumbnail_load_timer.stop()
+
+    def _schedule_visible_thumbnail_load(self, *_args: object) -> None:
+        if self.media_view_mode != "thumbnails" or self._thumbnail_load_in_progress:
+            return
+        # Coalesce rapid scroll and resize events.  Detailed-list mode returns
+        # above, so it never opens a thumburl request.
+        self._thumbnail_load_timer.start(120)
+
+    def _visible_thumbnail_media(self) -> list[RemoteMedia]:
+        if self.media_view_mode != "thumbnails":
+            return []
+        viewport = self.media_thumbnails.viewport().rect()
+        visible: list[RemoteMedia] = []
+        for index in range(self.media_thumbnails.count()):
+            list_item = self.media_thumbnails.item(index)
+            if not viewport.intersects(self.media_thumbnails.visualItemRect(list_item)):
+                continue
+            fsid = str(list_item.data(Qt.UserRole))
+            if fsid in self._thumbnail_loaded_fsids or fsid in self._thumbnail_failed_fsids:
+                continue
+            item = next((candidate for candidate in self.current_media if candidate.fsid == fsid), None)
+            if item is not None and item.thumbnail_url:
+                visible.append(item)
+            if len(visible) >= LAZY_THUMBNAIL_BATCH_SIZE:
+                break
+        return visible
+
+    def _load_visible_thumbnails(self) -> None:
+        if self._thumbnail_load_in_progress or self.media_view_mode != "thumbnails":
+            return
+        media = self._visible_thumbnail_media()
+        if not media:
+            return
+        self._thumbnail_load_in_progress = True
+        generation = self._thumbnail_request_generation
+        requested_fsids = {item.fsid for item in media}
+        self._run_job(
+            "正在加载可见缩略图",
+            lambda progress: self._load_media_thumbnails(media, progress),
+            lambda output: self._media_thumbnails_loaded(generation, requested_fsids, output),
+            lambda error: self._media_thumbnails_failed(generation, error),
+        )
 
     def _load_media_thumbnails(
         self, media: list[RemoteMedia], progress: Callable[[int, str], None]
     ) -> dict[str, Path]:
-        thumbnail_media = [item for item in media if item.thumbnail_url]
-        if not thumbnail_media:
-            progress(100, "当前相册没有可用缩略图")
-            return {}
-        total = len(thumbnail_media)
-        completed = 0
-        completed_lock = threading.Lock()
-
-        def fetch_one(item: RemoteMedia) -> tuple[str, Path]:
-            assert item.thumbnail_url
-            cached = self.download_cache.get_or_download(
-                item.album_id,
-                item.fsid,
-                0,
-                lambda cache_directory: self._download_signed_thumbnail(item.thumbnail_url or "", cache_directory, "thumbnail.jpg"),
-                variant="thumbnail",
-            )
-            return item.fsid, cached.path
-
         output: dict[str, Path] = {}
-        with ThreadPoolExecutor(max_workers=THUMBNAIL_DOWNLOAD_WORKERS, thread_name_prefix="thumbnail") as pool:
-            futures = {pool.submit(fetch_one, item): item for item in thumbnail_media}
-            for future in as_completed(futures):
-                item = futures[future]
-                try:
-                    fsid, path = future.result()
-                    output[fsid] = path
-                except Exception as exc:  # noqa: BLE001 - one broken thumbnail must not hide the album
-                    LOGGER.debug("读取缩略图失败：%s：%s", item.name, type(exc).__name__)
-                with completed_lock:
-                    completed += 1
-                    current = completed
-                progress(int(current / total * 100), f"已加载缩略图 {current}/{total}")
+        total = max(1, len(media))
+        for index, item in enumerate(media, start=1):
+            try:
+                assert item.thumbnail_url
+                cached = self.download_cache.get_or_download(
+                    item.album_id,
+                    item.fsid,
+                    0,
+                    lambda cache_directory: self._download_signed_thumbnail(item.thumbnail_url or "", cache_directory, "thumbnail.jpg"),
+                    variant="thumbnail",
+                )
+                output[item.fsid] = cached.path
+            except Exception as exc:  # noqa: BLE001 - one broken thumbnail must not hide the album
+                LOGGER.debug("读取缩略图失败：%s：%s", item.name, type(exc).__name__)
+            progress(int(index / total * 100), f"已加载可见缩略图 {index}/{len(media)}")
         return output
 
     @staticmethod
@@ -1580,22 +1629,34 @@ class MainWindow(QMainWindow):
             raise RemoteClientError("缩略图为空。")
         return target
 
-    def _media_thumbnails_loaded(self, output: object) -> None:
+    def _media_thumbnails_loaded(self, generation: int, requested_fsids: set[str], output: object) -> None:
+        self._thumbnail_load_in_progress = False
+        if generation != self._thumbnail_request_generation:
+            self._schedule_visible_thumbnail_load()
+            return
         thumbnails = output if isinstance(output, dict) else {}
+        rendered_fsids: set[str] = set()
         for index in range(self.media_thumbnails.count()):
-            item = self.media_thumbnails.item(index)
-            path = thumbnails.get(item.data(Qt.UserRole))
+            list_item = self.media_thumbnails.item(index)
+            fsid = str(list_item.data(Qt.UserRole))
+            path = thumbnails.get(fsid)
             if not isinstance(path, Path) or not path.is_file():
                 continue
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
-                item.setIcon(QIcon(pixmap))
+                list_item.setIcon(QIcon(pixmap))
+                self._thumbnail_loaded_fsids.add(fsid)
+                rendered_fsids.add(fsid)
+        self._thumbnail_failed_fsids.update(requested_fsids - rendered_fsids)
         if thumbnails:
-            self.status.showMessage(f"已加载 {len(thumbnails)} 张相册缩略图。", 3500)
+            self.status.showMessage(f"已加载 {len(thumbnails)} 张可见缩略图。", 2500)
+        self._schedule_visible_thumbnail_load()
 
-    def _media_thumbnails_failed(self, _error: str) -> None:
-        # 列表图标仍可正常浏览；实际原图下载不依赖缩略图服务。
-        self.status.showMessage("部分相册缩略图未能加载，仍可使用详细列表或下载原图。", 5000)
+    def _media_thumbnails_failed(self, generation: int, _error: str) -> None:
+        self._thumbnail_load_in_progress = False
+        if generation == self._thumbnail_request_generation:
+            self.status.showMessage("可见缩略图未能加载，仍可使用详细列表或下载原图。", 5000)
+        self._schedule_visible_thumbnail_load()
 
     # ----- album actions -------------------------------------------
     def create_album(self) -> None:
