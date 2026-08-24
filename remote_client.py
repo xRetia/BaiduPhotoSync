@@ -267,6 +267,11 @@ class YikeRemoteClient:
             return min(2700, 90 + upload_seconds)
 
         def send_with_retry(original, args: tuple, kwargs: dict):
+            # Token discovery is a login probe rather than a durable transfer:
+            # it must fail quickly so a stale QR cookie cannot block the next
+            # browser candidate for 30+ seconds.  Strip this private flag before
+            # forwarding to requests.
+            no_retry = bool(kwargs.pop("_yike_no_retry", False))
             attempt = 0
             while True:
                 attempt += 1
@@ -278,7 +283,7 @@ class YikeRemoteClient:
                     requests.exceptions.ChunkedEncodingError,
                     requests.exceptions.Timeout,
                 ) as exc:
-                    if attempt > len(transport_retry_delays) or not rewind_body(args, kwargs):
+                    if no_retry or attempt > len(transport_retry_delays) or not rewind_body(args, kwargs):
                         raise
                     delay = transport_retry_delays[attempt - 1]
                     LOGGER.warning(
@@ -346,6 +351,9 @@ class YikeRemoteClient:
             return None
 
     def verify_login(self) -> str:
+        # This first successful read seeds the short-lived album cache.  The
+        # startup UI consumes the same snapshot instead of issuing a second
+        # 144-album request immediately after QR verification.
         albums = self.list_albums()
         return f"已连接，当前读取到 {len(albums)} 个相册。"
 

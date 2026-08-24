@@ -1721,7 +1721,10 @@ class MainWindow(QMainWindow):
     def _list_albums(self, progress: Callable[[int, str], None]) -> list[RemoteAlbum]:
         assert self.client
         progress(20, "正在读取云端相册")
-        result = self.client.list_albums(force_refresh=True)
+        # verify_login() has already populated this cache during first startup.
+        # Reuse it so successful QR login does not immediately perform the same
+        # complete album-directory enumeration a second time.
+        result = self.client.list_albums(force_refresh=not self._startup_waiting_for_albums)
         progress(100, f"已读取 {len(result)} 个相册")
         return result
 

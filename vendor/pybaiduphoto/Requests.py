@@ -46,9 +46,21 @@ class Requests:
 
     def get_bdstoken(self):
         url = "https://photo.baidu.com/photo/web/home"
-        response = requests.get(
-            url, proxies=self.get_proxies(), cookies=self.cookies, headers=self.headers
-        )
+        # QR login can briefly expose a preliminary cookie snapshot.  Keep this
+        # token probe short and avoid transport retries so the next candidate
+        # can be verified promptly instead of waiting through a 30s timeout.
+        try:
+            response = requests.get(
+                url,
+                proxies=self.get_proxies(),
+                cookies=self.cookies,
+                headers=self.headers,
+                timeout=(5, 8),
+                _yike_no_retry=True,
+            )
+        except requests.exceptions.RequestException as exc:
+            logging.warning("bdstoken login probe failed quickly: %s", type(exc).__name__)
+            return None
         d = None
         for l in response.text.split("\n"):
             if "templateData" in l:

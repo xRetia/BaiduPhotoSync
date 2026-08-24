@@ -131,12 +131,20 @@ class API:
         if cursor is not None:
             params["cursor"] = cursor
         pageInfo = self.req.getReqJson(url, params=params)
-        if pageInfo["list"] is None:
+        if not isinstance(pageInfo, dict):
+            raise RuntimeError("album list 接口未返回 JSON 对象")
+        if pageInfo.get("errno") not in (None, 0):
+            raise RuntimeError(
+                "album list 接口返回错误：errno={}，request_id={}".format(
+                    pageInfo.get("errno"), pageInfo.get("request_id")
+                )
+            )
+        if pageInfo.get("list") is None:
             return {"items": [], "has_more": False, "cursor": None}
         return {
             "items": [Album(i, self.req) for i in pageInfo["list"]],
-            "has_more": pageInfo["has_more"] == 1,
-            "cursor": pageInfo["cursor"],
+            "has_more": pageInfo.get("has_more") == 1,
+            "cursor": pageInfo.get("cursor"),
         }
 
     def getAlbumList_All(self, max=-1):

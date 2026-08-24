@@ -139,6 +139,7 @@ jobs:
           ## v2.1.0 highlights
 
           - Closing the first-login dialog now exits cleanly instead of leaving a background process with no visible window. Logging out hides the main window and returns to a fresh sign-in dialog.
+          - QR candidate token probes use a short, non-replayed timeout, and the first album-browser render reuses the successful verification snapshot instead of reading the entire album directory twice.
           - Manual upload selection is limited to supported photo and video formats, with unsupported or empty files skipped before upload begins.
           - Album browser startup waits for the initial cloud-album list before showing the main window, reducing native-window flash; media list containers use a borderless presentation.
           - Windows FFmpeg installation replaces prior tool files safely and reports an actionable Windows-only message if the directory is occupied.
