@@ -972,6 +972,11 @@ function createSettingsWindow() {
   settingsWindow.loadFile(path.join(RENDERER, "settings.html"));
 
   settingsWindow.on("closed", () => {
+    // 设置窗口关闭时自动取消正在进行的 FFmpeg 下载
+    if (ffmpegDownloadController) {
+      ffmpegDownloadController.abort();
+      ffmpegDownloadController = null;
+    }
     settingsWindow = null;
   });
 }
@@ -1431,11 +1436,13 @@ async function handleMethod(method, params, sender) {
     try {
       // 下载源：official（官方）或 mirror（国内镜像）
       const source = params.source === SOURCES.MIRROR ? SOURCES.MIRROR : SOURCES.OFFICIAL;
+      // 为本次下载创建取消控制器，保存到模块级变量以支持外部取消
+      ffmpegDownloadController = new AbortController();
       const result = await ensure_windows_ffmpeg((value, text) => {
         if (sender && !sender.isDestroyed()) {
           sender.send("bridge:progress", value, text);
         }
-      }, source);
+      }, source, ffmpegDownloadController.signal);
       return {
         downloaded: result.downloaded,
         source: source === SOURCES.MIRROR ? "mirror" : "official",
@@ -1443,8 +1450,20 @@ async function handleMethod(method, params, sender) {
         ffprobe_path: result.ffprobePath,
       };
     } catch (err) {
+      // 用户取消时不作为错误抛出，返回 cancelled 标记
+      if (err.cancelled) return { cancelled: true };
       throw new Error(err.message || String(err));
+    } finally {
+      ffmpegDownloadController = null;
     }
+  }
+
+  if (method === "cancel_ffmpeg") {
+    if (ffmpegDownloadController) {
+      ffmpegDownloadController.abort();
+      return { cancelled: true };
+    }
+    return { cancelled: false };
   }
 
   // ---- Misc ----

@@ -33,9 +33,10 @@ function _baseUrl(source) {
 }
 
 class FFmpegDownloadError extends Error {
-  constructor(message) {
+  constructor(message, cancelled = false) {
     super(message);
     this.name = "FFmpegDownloadError";
+    this.cancelled = cancelled;
   }
 }
 
@@ -72,7 +73,7 @@ function _formatSpeed(value) {
   return `${(value / 1024 / 1024).toFixed(1)} MB/秒`;
 }
 
-async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL) {
+async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL, externalSignal = null) {
   const url = `${_baseUrl(source)}/${ARCHIVE_NAME}`;
   const sourceLabel = source === SOURCES.MIRROR ? "国内镜像" : "官方";
   const tempPath = targetPath + ".part";
@@ -84,10 +85,18 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL)
   const controller = new AbortController();
   let stallTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT);
 
+  // 联动外部取消信号
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) { clearTimeout(stallTimer); throw new FFmpegDownloadError("下载已取消。", true); }
+    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  let writer = null;
   try {
     const resp = await fetch(url, { signal: controller.signal });
     const total = parseInt(resp.headers.get("content-length") || "0", 10);
-    const writer = fs.createWriteStream(tempPath);
+    writer = fs.createWriteStream(tempPath);
     const reader = resp.body.getReader();
     const hash = crypto.createHash("sha256");
     let downloaded = 0;
@@ -123,8 +132,18 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL)
     return hash.digest("hex").toLowerCase();
   } catch (err) {
     clearTimeout(stallTimer);
+    // 先关闭写入流释放文件句柄，再删除临时文件
+    if (writer) {
+      try { writer.destroy(); } catch {}
+      await new Promise((r) => writer.on("close", r)).catch(() => {});
+    }
     try { fs.unlinkSync(tempPath); } catch {}
-    throw new FFmpegDownloadError(`“极光引擎”（${sourceLabel}源）下载失败：${err.name}`);
+    if (externalSignal?.aborted || err.name === "AbortError") {
+      throw new FFmpegDownloadError("下载已取消。", true);
+    }
+    throw new FFmpegDownloadError(`"极光引擎"（${sourceLabel}源）下载失败：${err.name}`);
+  } finally {
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -183,9 +202,10 @@ async function _extractTools(archivePath, destination) {
  * 确保 Windows“极光引擎”可用，如需则下载安装。
  * @param {function|null} progress - 进度回调 (percent, message)
  * @param {string} [source] - 下载源：official（官方）或 mirror（国内镜像），默认 official
+ * @param {AbortSignal|null} [abortSignal] - 外部取消信号，abort 时中止下载
  * @returns {Promise<{ffmpegPath, ffprobePath, downloaded, archiveSha256}>}
  */
-async function ensure_windows_ffmpeg(progress = null, source = SOURCES.OFFICIAL) {
+async function ensure_windows_ffmpeg(progress = null, source = SOURCES.OFFICIAL, abortSignal = null) {
   if (process.platform !== "win32") {
     throw new FFmpegDownloadError("按需下载仅支持 Windows；请在 Windows 程序中启用视频压缩。");
   }
@@ -203,10 +223,12 @@ async function ensure_windows_ffmpeg(progress = null, source = SOURCES.OFFICIAL)
   }
 
   const archivePath = path.join(path.dirname(destination), ARCHIVE_NAME);
+  if (abortSignal?.aborted) throw new FFmpegDownloadError("下载已取消。", true);
   if (progress) progress(2, `正在读取极光视频压制引擎（${sourceLabel}源）发布校验信息…`);
   const expectedSha256 = await _readChecksum(source);
+  if (abortSignal?.aborted) throw new FFmpegDownloadError("下载已取消。", true);
   if (progress) progress(5, `已获取校验信息，开始从${sourceLabel}源下载极光视频压制引擎…`);
-  const actualSha256 = await _downloadArchive(archivePath, progress, source);
+  const actualSha256 = await _downloadArchive(archivePath, progress, source, abortSignal);
   if (progress) progress(87, "正在校验极光视频压制引擎下载完整性…");
   if (actualSha256 !== expectedSha256) {
     try { fs.unlinkSync(archivePath); } catch {}

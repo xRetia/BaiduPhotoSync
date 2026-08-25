@@ -214,18 +214,28 @@ window.api.onProgress((value, text) => {
   }
 });
 
-// Download 极光视频压制引擎（FFmpeg）
+// Download 极光视频压制引擎（FFmpeg）—— 同一按钮兼作下载/取消
+let ffmpegDownloading = false;
 $("btnDownloadFFmpeg").addEventListener("click", async () => {
+  // 下载中点击则取消
+  if (ffmpegDownloading) {
+    try { await bridge("cancel_ffmpeg"); } catch {}
+    return;
+  }
   const source = $("ffmpegSource") ? $("ffmpegSource").value : "official";
   const sourceLabel = source === "mirror" ? "国内镜像" : "官方源";
-  $("btnDownloadFFmpeg").disabled = true;
-  $("btnDownloadFFmpeg").textContent = "正在下载…";
+  ffmpegDownloading = true;
+  $("btnDownloadFFmpeg").disabled = false;
+  $("btnDownloadFFmpeg").textContent = "取消下载";
   $("ffmpegProgressRow").style.display = "flex";
   setEngineReady(false);
   try {
     const result = await bridge("download_ffmpeg", { source });
     $("ffmpegProgressRow").style.display = "none";
-    if (result.downloaded) {
+    if (result.cancelled) {
+      $("ffmpegStatus").textContent = "已取消下载极光视频压制引擎。";
+      $("btnDownloadFFmpeg").textContent = "下载极光视频压制引擎";
+    } else if (result.downloaded) {
       $("ffmpegStatus").textContent = `极光视频压制引擎（${sourceLabel}）下载完成，已可使用视频压缩。`;
       $("ffmpegDownloadRow").style.display = "none";
       setEngineReady(true);
@@ -236,9 +246,10 @@ $("btnDownloadFFmpeg").addEventListener("click", async () => {
     }
   } catch (err) {
     $("ffmpegStatus").textContent = `下载极光视频压制引擎（${sourceLabel}）失败：${err.message || err}`;
-    $("btnDownloadFFmpeg").disabled = false;
     $("btnDownloadFFmpeg").textContent = "下载极光视频压制引擎";
     $("ffmpegProgressRow").style.display = "none";
+  } finally {
+    ffmpegDownloading = false;
   }
 });
 
