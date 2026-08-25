@@ -27,6 +27,7 @@ const state = {
   currentSyncSequence: null,
   syncRowsBySequence: {},
   loginFromSplash: false,
+  loggingOut: false,
 };
 
 // --- DOM helpers ---
@@ -938,13 +939,17 @@ $("btnConnect").addEventListener("click", () => {
 });
 
 async function logout() {
+  if (state.loggingOut) return;
   if (state.syncMode !== "idle") { toast("请先暂停或停止同步再退出登录。", "warning"); return; }
   // 不再先显示 loading——让用户看到登出窗口的自定义退出页面
+  state.loggingOut = true;
   try {
     const result = await window.api.startLogout();
     if (!result.success) {
-      const msgs = { timeout: "登出超时，未检测到会话失效。", no_bduss: "无法注入登录凭证，登出失败。", no_client: "未找到活跃会话。" };
-      toast((result.reason && msgs[result.reason]) || "登出失败，本机登录信息仍保留。", "warning");
+      if (result.reason !== "cancelled") {
+        const msgs = { timeout: "登出超时，未检测到会话失效。", no_bduss: "无法注入登录凭证，登出失败。", no_client: "未找到活跃会话。" };
+        toast((result.reason && msgs[result.reason]) || "登出失败，本机登录信息仍保留。", "warning");
+      }
       return;
     }
     // 登出成功，显示 loading 等待清理完成
@@ -965,6 +970,8 @@ async function logout() {
   } catch (err) {
     hideLogoutLoading();
     toast("退出登录失败: " + err.message, "error");
+  } finally {
+    state.loggingOut = false;
   }
 }
 

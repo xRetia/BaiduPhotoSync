@@ -382,8 +382,8 @@ function createQRLoginWindow() {
   }
 
   qrWindow = new BrowserWindow({
-    width: 370,
-    height: 520,
+    width: 730,
+    height: 550,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -406,24 +406,46 @@ function createQRLoginWindow() {
   // 防止页面 <title> 覆盖窗口标题
   qrWindow.on("page-title-updated", (e) => e.preventDefault());
 
-  // 注入 CSS：隐藏百度页面多余内容，只显示登录弹窗
+  // 左侧 360x520 品牌图片（本地资源转 data URI，避免远程页加载 file:// 被拦截）
+  let loginSplashDataUri = "";
+  try {
+    const splashBuf = fs.readFileSync(path.join(__dirname, "assets", "login-splash.png"));
+    loginSplashDataUri = "data:image/png;base64," + splashBuf.toString("base64");
+  } catch (err) {
+    log.warn("login", "登录：未找到 login-splash.png，使用纯色背景:", err.message);
+  }
+  const splashBg = loginSplashDataUri
+    ? `url("${loginSplashDataUri}") center/cover no-repeat`
+    : "#1d63bf";
+
+  // 注入 CSS：隐藏百度页面多余内容，左側固定 360x520 品牌图，右侧显示登录弹窗
   const LOGIN_HIDE_CSS = `
+    body { overflow: hidden !important; }
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 360px; height: 520px;
+      background: ${splashBg};
+      z-index: 1;
+    }
     .header, .flastupload-guide, .box, .features, .box-mark1, .box-mark2, .box-desc1, .box-desc2 { display: none !important; }
     .main { background: #ffffff !important; height: 100% !important; padding: 0 !important; margin: 0 !important; }
     .login-pop {
       position: fixed !important;
       top: 0 !important;
-      left: 0 !important;
-      right: 0 !important;
-      bottom: 0 !important;
-      width: 100% !important;
-      height: 100% !important;
+      left: 360px !important;
+      right: auto !important;
+      bottom: auto !important;
+      width: 370px !important;
+      height: 520px !important;
       transform: none !important;
       margin: 0 !important;
       padding: 0 !important;
       border-radius: 0 !important;
       box-shadow: none !important;
       border: none !important;
+      z-index: 2 !important;
     }
   `;
 
@@ -859,6 +881,13 @@ function createLogoutWindow(cookieJson) {
 
     logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
       log.warn("logout", `登出：页面加载失败 ${errorCode} ${errorDescription}`);
+    });
+
+    // 用户主动关闭登出窗口（点 X 或取消）：必须结束流程，否则 Promise 永远不 resolve，
+    // 渲染端 loggingOut 标志卡死，导致之后再也无法打开登出界面。
+    logoutWindow.on("closed", () => {
+      log.debug("logout", "登出：窗口被关闭（用户取消），结束流程");
+      finish({ success: false, reason: "cancelled" });
     });
 
     async function startLogout() {
