@@ -7,6 +7,7 @@
  */
 
 const https = require("https");
+const log = require("../logger");
 const http = require("http");
 const crypto = require("crypto");
 
@@ -73,7 +74,7 @@ class Requests {
         }
       }
       if (!d) {
-        console.error("can not get bdstoken");
+        log.error("requests", "can not get bdstoken");
         return null;
       }
       // Python: l.split("=")[1].split(";")[0].split(",")[0].split(":")[1].replace("'", "").strip()
@@ -86,7 +87,7 @@ class Requests {
         .trim();
       return token;
     } catch (err) {
-      console.warn("bdstoken login probe failed quickly:", err.name);
+      log.warn("requests", "bdstoken login probe failed quickly:", err.name);
       return null;
     }
   }
@@ -133,7 +134,7 @@ class Requests {
           throw err;
         }
         const delay = TRANSPORT_RETRY_DELAYS[attempt - 1];
-        console.warn(
+        log.warn("requests", 
  `传输层错误（${err.name}），${delay}秒后重试（第 ${attempt}/${TRANSPORT_RETRY_DELAYS.length} 次）`
         );
         await new Promise((r) => setTimeout(r, delay * 1000));
@@ -197,7 +198,7 @@ class Requests {
     const resp = await this.get(url, params, options);
     const data = await resp.json();
     if (data.errno !== 0) {
-      console.error("request return error, return =", JSON.stringify(data).slice(0, 500));
+      log.error("requests", "request return error, return =", JSON.stringify(data).slice(0, 500));
     }
     return data;
   }
@@ -207,7 +208,7 @@ class Requests {
     const resp = await this.post(url, params, data, options);
     const json = await resp.json();
     if (json.errno !== 0) {
-      console.error("request return error, return =", JSON.stringify(json).slice(0, 500));
+      log.error("requests", "request return error, return =", JSON.stringify(json).slice(0, 500));
     }
     return json;
   }

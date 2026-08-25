@@ -25,6 +25,7 @@ const { VideoCompressionOptions, VideoCompressionError, locate_ffmpeg } = requir
 const { FFmpegDownloadError, ensure_windows_ffmpeg } = require("./src/ffmpeg_downloader");
 const { app_data_directory, clear_windows_registry_settings, remove_application_data } = require("./src/platform_services");
 const { validate_media_file, free_user_size_message } = require("./src/media_validation");
+const log = require("./src/logger");
 
 const MIB = 1024 * 1024;
 const DOWNLOAD_CACHE_DEFAULT_MIB = 1024;
@@ -136,7 +137,7 @@ async function startKeepalive(cookieJson, enhanced) {
   keepaliveWindow.webContents.on("did-finish-load", () => {
     keepaliveRefreshInFlight = false;
     if (!keepaliveActive) return;
-    console.debug("会话保活页面加载完成，正在检查 Cookie 更新。");
+    log.debug("keepalive", "会话保活页面加载完成，正在检查 Cookie 更新。");
     // 延迟 900ms 后检查 cookie，让 Set-Cookie 响应头和 JS 重定向生效
     setTimeout(() => {
       if (keepaliveActive && keepaliveWindow && !keepaliveWindow.isDestroyed()) {
@@ -148,7 +149,7 @@ async function startKeepalive(cookieJson, enhanced) {
   keepaliveWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
     keepaliveRefreshInFlight = false;
     if (!keepaliveActive) return;
-    console.warn(`会话保活页面加载失败: ${errorCode} ${errorDescription}`);
+    log.warn("keepalive", `会话保活页面加载失败: ${errorCode} ${errorDescription}`);
   });
 
   // cookie 注入完成后立即加载页面
@@ -159,7 +160,7 @@ async function startKeepalive(cookieJson, enhanced) {
   if (keepaliveEnhanced) {
     keepaliveTimer = setInterval(() => {
       if (keepaliveWindow && !keepaliveWindow.isDestroyed() && !keepaliveRefreshInFlight) {
-        console.debug("会话保活：正在刷新隐藏页面（增强模式）");
+        log.debug("keepalive", "会话保活：正在刷新隐藏页面（增强模式）");
         keepaliveRefreshInFlight = true;
         keepaliveWindow.loadURL(KEEPALIVE_URL);
       }
@@ -177,7 +178,7 @@ async function startKeepalive(cookieJson, enhanced) {
     }, 2000);
   });
 
-  console.debug(`会话保活已启动：隐藏页面=${KEEPALIVE_URL}，增强定时刷新=${keepaliveEnhanced ? "启用（每3分钟）" : "关闭"}`);
+  log.debug("keepalive", `会话保活已启动：隐藏页面=${KEEPALIVE_URL}，增强定时刷新=${keepaliveEnhanced ? "启用（每3分钟）" : "关闭"}`);
 }
 
 function refreshKeepaliveCookie(ses) {
@@ -197,12 +198,12 @@ function refreshKeepaliveCookie(ses) {
       if (client) {
         try {
           client.updateCookie(cookieJson);
-          console.debug("会话保活检测到 Cookie 更新，已原地更新活跃 client 实例");
+          log.debug("keepalive", "会话保活检测到 Cookie 更新，已原地更新活跃 client 实例");
         } catch (err) {
-          console.warn("会话保活 cookie 刷新后更新 client 失败:", err.message || err);
+          log.warn("keepalive", "会话保活 cookie 刷新后更新 client 失败:", err.message || err);
         }
       } else {
-        console.debug("会话保活检测到 Cookie 更新，已保存刷新后的会话");
+        log.debug("keepalive", "会话保活检测到 Cookie 更新，已保存刷新后的会话");
       }
     }
   }).catch(() => {});
@@ -239,14 +240,14 @@ function setKeepaliveEnhanced(enabled) {
   if (keepaliveEnhanced && keepaliveWindow) {
     keepaliveTimer = setInterval(() => {
       if (keepaliveWindow && !keepaliveWindow.isDestroyed() && !keepaliveRefreshInFlight) {
-        console.debug("会话保活：正在刷新隐藏页面（增强模式）");
+        log.debug("keepalive", "会话保活：正在刷新隐藏页面（增强模式）");
         keepaliveRefreshInFlight = true;
         keepaliveWindow.loadURL(KEEPALIVE_URL);
       }
     }, KEEPALIVE_INTERVAL_MS);
-    console.debug("账号增强防掉线已启用：每 3 分钟刷新隐藏页面。");
+    log.debug("keepalive", "账号增强防掉线已启用：每 3 分钟刷新隐藏页面。");
   } else {
-    console.debug("账号增强防掉线已关闭：隐藏页面仅由自身 JavaScript 维持会话。");
+    log.debug("keepalive", "账号增强防掉线已关闭：隐藏页面仅由自身 JavaScript 维持会话。");
   }
 }
 
@@ -449,11 +450,11 @@ function createQRLoginWindow() {
   // 页面跳转时立即隐藏 qrWindow，显示 loading，后台继续提取 cookie
   // 只对离开登录页的跳转才触发（初始加载 loginUrl 不算）
   qrWindow.webContents.on("will-navigate", (_e, url) => {
-    console.debug(`登录：页面即将跳转 → ${url}`);
+    log.debug("login", `登录：页面即将跳转 → ${url}`);
     if (!url.includes("/login")) onLoginNavigated();
   });
   qrWindow.webContents.on("did-navigate", (_e, url) => {
-    console.debug(`登录：页面已跳转 → ${url}`);
+    log.debug("login", `登录：页面已跳转 → ${url}`);
     if (!url.includes("/login")) {
       onLoginNavigated();
       // 到达登录后的主页（非 /login）即视为登录完成，稍后提交完整 cookie
@@ -466,7 +467,7 @@ function createQRLoginWindow() {
   qrWindow.webContents.on("did-navigate-in-page", (_e, url) => {
     // SPA 内部跳转也可能是登录成功后的路由变化
     if (url.includes("photo.baidu.com/photo/web/") && !url.includes("/login")) {
-      console.debug(`登录：SPA 内部跳转 → ${url}`);
+      log.debug("login", `登录：SPA 内部跳转 → ${url}`);
       onLoginNavigated();
       // 登录成功跳转到主页后才提交，确保 Baidu 已下发完整会话 Cookie（避免拿到
       // 扫码时的临时 BDUSS 导致后续 API 返回 errno -6）
@@ -745,7 +746,7 @@ function createLogoutWindow(cookieJson) {
       logoutWindow.destroy();
     }
 
-    console.debug(`登出：准备注入 cookie，cookieJson 长度=${cookieJson ? cookieJson.length : 0}`);
+    log.debug("logout", `登出：准备注入 cookie，cookieJson 长度=${cookieJson ? cookieJson.length : 0}`);
 
     logoutWindow = new BrowserWindow({
       width: 400,
@@ -782,23 +783,23 @@ function createLogoutWindow(cookieJson) {
         logoutWindow.destroy();
       }
       logoutWindow = null;
-      console.debug(`登出：结束，结果=${JSON.stringify(result)}`);
+      log.debug("logout", `登出：结束，结果=${JSON.stringify(result)}`);
       resolve(result);
     }
 
     // 检测页面跳转到登录页 = 登出成功
     logoutWindow.webContents.on("did-navigate", (_e, url) => {
-      console.debug(`登出：页面导航到 ${url}`);
+      log.debug("logout", `登出：页面导航到 ${url}`);
       if (url.includes("photo.baidu.com/photo/web/login")) {
-        console.debug("登出：已跳转到登录页，登出成功");
+        log.debug("login", "登出：已跳转到登录页，登出成功");
         finish({ success: true });
       }
     });
     // SPA 内部导航也可能跳到登录页
     logoutWindow.webContents.on("did-navigate-in-page", (_e, url) => {
-      console.debug(`登出：页面内导航到 ${url}`);
+      log.debug("logout", `登出：页面内导航到 ${url}`);
       if (url.includes("photo.baidu.com/photo/web/login")) {
-        console.debug("登出：SPA 内导航到登录页，登出成功");
+        log.debug("login", "登出：SPA 内导航到登录页，登出成功");
         finish({ success: true });
       }
     });
@@ -812,7 +813,7 @@ function createLogoutWindow(cookieJson) {
           (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
         );
         if (!stillLoggedIn) {
-          console.debug("登出：BDUSS cookie 已消失，登出成功");
+          log.debug("logout", "登出：BDUSS cookie 已消失，登出成功");
           finish({ success: true });
         }
       }).catch(() => {});
@@ -848,7 +849,7 @@ function createLogoutWindow(cookieJson) {
 
     logoutWindow.webContents.on("did-finish-load", () => {
       const url = logoutWindow.webContents.getURL();
-      console.debug(`登出：页面加载完成，当前 URL=${url}`);
+      log.debug("logout", `登出：页面加载完成，当前 URL=${url}`);
       if (url.includes("photo.baidu.com/photo/web/login")) {
         finish({ success: true });
         return;
@@ -857,7 +858,7 @@ function createLogoutWindow(cookieJson) {
     });
 
     logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
-      console.warn(`登出：页面加载失败 ${errorCode} ${errorDescription}`);
+      log.warn("logout", `登出：页面加载失败 ${errorCode} ${errorDescription}`);
     });
 
     async function startLogout() {
@@ -866,7 +867,7 @@ function createLogoutWindow(cookieJson) {
       // 注入当前 cookie
       try {
         const cookies = JSON.parse(cookieJson);
-        console.debug(`登出：解析到 ${cookies.length} 个 cookie`);
+        log.debug("logout", `登出：解析到 ${cookies.length} 个 cookie`);
         const setPromises = [];
         for (const c of cookies) {
           if (!c.name || !c.value) continue;
@@ -885,9 +886,9 @@ function createLogoutWindow(cookieJson) {
           );
         }
         await Promise.all(setPromises);
-        console.debug("登出：cookie 注入完成");
+        log.debug("logout", "登出：cookie 注入完成");
       } catch (err) {
-        console.warn("登出：cookie 注入失败:", err.message || err);
+        log.warn("logout", "登出：cookie 注入失败:", err.message || err);
       }
 
       // 确认 BDUSS 已注入
@@ -896,14 +897,14 @@ function createLogoutWindow(cookieJson) {
         (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
       );
       if (!bdussInjected) {
-        console.warn("登出：BDUSS cookie 未成功注入，无法登出");
+        log.warn("logout", "登出：BDUSS cookie 未成功注入，无法登出");
         finish({ success: false, reason: "no_bduss" });
         return;
       }
-      console.debug("登出：BDUSS cookie 已确认注入");
+      log.debug("logout", "登出：BDUSS cookie 已确认注入");
 
       // 加载百度相册首页
-      console.debug(`登出：加载 ${LOGOUT_HOME_URL}`);
+      log.debug("logout", `登出：加载 ${LOGOUT_HOME_URL}`);
       logoutWindow.loadURL(LOGOUT_HOME_URL);
 
       // 轮询检测 BDUSS 是否消失（对齐 Python 版：cookie 移除即登出成功）。
@@ -918,7 +919,7 @@ function createLogoutWindow(cookieJson) {
 
       // 30 秒超时
       logoutTimeoutTimer = setTimeout(() => {
-        console.warn("登出：超时，未跳转到登录页");
+        log.warn("login", "登出：超时，未跳转到登录页");
         finish({ success: false, reason: "timeout" });
       }, LOGOUT_TIMEOUT_MS);
     }
@@ -1134,7 +1135,7 @@ async function handleMethod(method, params, sender) {
         return { connected: true };
       } catch (err) {
         lastErr = err;
-        console.warn(`connect 第 ${attempt}/${maxRetries} 次失败：${err.message || err}`);
+        log.warn("connect", `connect 第 ${attempt}/${maxRetries} 次失败：${err.message || err}`);
         if (attempt < maxRetries) {
           // 递增延迟：900ms, 1550ms, 2200ms, 2850ms, 3500ms, 4150ms, 4800ms（封顶 5000ms）
           const delay = Math.min(5000, 900 + (attempt - 1) * 650);
@@ -1486,7 +1487,7 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
   try {
     return await handleMethod(method, params || {}, event.sender);
   } catch (err) {
-    console.error(`[bridge:call] ${method} 失败:`, err.message || err);
+    log.error("bridge", `[bridge:call] ${method} 失败:`, err.message || err);
     throw err;
   }
 });

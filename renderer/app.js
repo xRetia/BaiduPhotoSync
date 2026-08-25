@@ -26,6 +26,7 @@ const state = {
   previewPending: false,
   currentSyncSequence: null,
   syncRowsBySequence: {},
+  loginFromSplash: false,
 };
 
 // --- DOM helpers ---
@@ -66,6 +67,13 @@ async function bridge(method, params = {}) {
     throw err;
   }
 }
+
+// --- Timing helpers ---
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 启动 splash 最短展示时长：即便登录瞬间完成也要显示满 1500ms，避免闪烁。
+const SPLASH_MIN_MS = 1500;
+let splashShownAt = 0;
 
 // --- Format helpers ---
 function formatSize(value) {
@@ -165,6 +173,9 @@ function setSyncControls(mode) {
 
 // === Login ===
 async function startLogin() {
+  // 本函数仅在启动时（splash loading 期间）调用，标记登录窗口来源为 splash，
+  // 用于决定关闭登录窗口时是否退出程序。
+  state.loginFromSplash = true;
   try {
     const result = await bridge("get_session");
     if (result && result.cookie) {
@@ -186,8 +197,14 @@ async function startLogin() {
 }
 
 function openQRLogin() {
-  setStatus("请扫描二维码登录。");
-  window.api.openQRLogin();
+  // 等启动 splash 展示满最短时长后再打开登录窗口：splash 单独显示 1500ms，
+  // 到点恰好隐藏并弹出登录窗口，避免两种 loading 同时存在。
+  const remaining = Math.max(0, SPLASH_MIN_MS - (Date.now() - splashShownAt));
+  delay(remaining).then(() => {
+    hideLoading();
+    setStatus("请扫描二维码登录。");
+    window.api.openQRLogin();
+  });
 }
 
 window.api.onQRLoginCookie(async (cookieJson) => {
@@ -216,12 +233,15 @@ window.api.onQRLoginLoadingHide(() => {
 
 window.api.onQRLoginClosed(() => {
   hideLoginLoading();
-  if (!state.connected) {
-    setStatus("登录已取消。");
-    setProgress(0, "就绪");
-    // 未登录关闭登录窗口，退出应用
+  // 登录成功后的程序化关闭（验证通过后主进程销毁窗口）：保持已连接状态，不做处理
+  if (state.connected) return;
+  setStatus("登录已取消。");
+  setProgress(0, "就绪");
+  if (state.loginFromSplash) {
+    // 由启动 splash 弹出的登录窗口被关闭：无会话可继续，退出程序
     window.api.quit();
   }
+  // 否则（如运行期手动点击登录/退出后重登）：仅关闭登录窗口，不退出程序
 });
 
 // === Login loading overlay (样式对齐退出登录) ===
@@ -270,7 +290,23 @@ function showLoading(text) {
   if (text) $("loadingStatus").textContent = text;
   $("loadingFill").style.width = "30%";
 }
-function hideLoading() { $("loadingOverlay").style.display = "none"; }
+let hideLoadingTimer = null;
+function hideLoading() {
+  const remaining = SPLASH_MIN_MS - (Date.now() - splashShownAt);
+  if (remaining > 0) {
+    // 未达最短展示时长：延迟到满 1500ms 再真正隐藏
+    if (hideLoadingTimer) return;
+    hideLoadingTimer = setTimeout(() => {
+      hideLoadingTimer = null;
+      const ov = $("loadingOverlay");
+      if (ov) ov.style.display = "none";
+    }, remaining);
+    return;
+  }
+  if (hideLoadingTimer) { clearTimeout(hideLoadingTimer); hideLoadingTimer = null; }
+  const ov = $("loadingOverlay");
+  if (ov) ov.style.display = "none";
+}
 function setLoadingStage(percent, text) {
   $("loadingFill").style.width = percent + "%";
   if (text) $("loadingStatus").textContent = text;
@@ -897,6 +933,7 @@ $("btnConnect").addEventListener("click", () => {
     logout();
     return;
   }
+  state.loginFromSplash = false;
   openQRLogin();
 });
 
@@ -923,6 +960,7 @@ async function logout() {
     $("planSummary").textContent = "尚未比较";
     hideLogoutLoading();
     setStatus("已退出登录，请重新扫码登录。");
+    state.loginFromSplash = false;
     openQRLogin();
   } catch (err) {
     hideLogoutLoading();
@@ -984,6 +1022,7 @@ window.api.onCloseRequested(async () => {
 // === Init ===
 async function init() {
   try { $("logoIcon").src = "../assets/yike_sync_256.png"; $("loadingIcon").src = "../assets/yike_sync_256.png"; } catch (err) {}
+  splashShownAt = Date.now();
   showLoading("正在准备应用…");
   setLoadingStage(10, "正在准备应用…");
   try {

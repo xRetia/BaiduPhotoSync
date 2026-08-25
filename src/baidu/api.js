@@ -6,6 +6,7 @@
  */
 
 const fs = require("fs");
+const log = require("../logger");
 const path = require("path");
 const crypto = require("crypto");
 const { Requests, buildMultipartFile } = require("./requests");
@@ -261,7 +262,7 @@ class API {
     if (return_type === undefined) {
       const errno = preC ? preC.errno : null;
       const errmsg = preC ? preC.errmsg : null;
-      console.error(
+      log.error("api", 
         `precreate 响应缺少 return_type，errno=[${errno}]，errmsg=[${errmsg}]`
       );
       if (String(errno) === "50801") throw new Error("文件过大或需要开通会员（errno=50801）");
@@ -275,7 +276,7 @@ class API {
       if (!reqJson2 || !reqJson2.data) {
         const errno = reqJson2 ? reqJson2.errno : null;
         const errmsg = reqJson2 ? reqJson2.errmsg : null;
-        console.error(`upload create 响应缺少 data，return_type=[1]，errno=[${errno}]`);
+        log.error("api", `upload create 响应缺少 data，return_type=[1]，errno=[${errno}]`);
         if (String(errno) === "50801") throw new Error("文件过大或需要开通会员（errno=50801）");
         if (String(errno) === "50000") throw new Error("请求过于频繁，请稍后重试（errno=50000）");
         if (String(errno) === "2") throw new Error("文件超过普通用户大小上限（errno=2）");
@@ -286,13 +287,13 @@ class API {
       return info;
     } else if (return_type === 3) {
       // Already exists
-      console.warn("upload item already exist on remote");
+      log.warn("api", "upload item already exist on remote");
       if (!preC || !preC.data) {
         throw new Error("文件已存在但响应缺少 data");
       }
       return preC.data;
     } else {
-      console.error(`unknown return_type = ${return_type} @upload_1file_directly`);
+      log.error("api", `unknown return_type = ${return_type} @upload_1file_directly`);
       return null;
     }
   }
@@ -391,7 +392,7 @@ class API {
     if (checkMd5 && info.md5) {
       const localMd5 = crypto.createHash("md5").update(content).digest("hex");
       if (info.md5 !== localMd5) {
-        console.error(`MD5 check error, file=[${filePath}]`);
+        log.error("api", `MD5 check error, file=[${filePath}]`);
       }
     }
     return filePath;

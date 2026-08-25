@@ -14,6 +14,7 @@
  */
 
 const fs = require("fs");
+const log = require("./logger");
 const path = require("path");
 const { API } = require("./baidu/api");
 const { validate_media_file } = require("./media_validation");
@@ -216,7 +217,7 @@ class YikeRemoteClient {
     // 媒体列表缓存: Map<album_id, [timestamp, RemoteMedia[]]>
     this._mediaCache = new Map();
 
-    console.debug(
+    log.debug("client", 
       `已初始化一刻相册客户端；已解析 ${Object.keys(this._cookies).length} 个 Cookie 字段`
     );
   }
@@ -265,7 +266,7 @@ class YikeRemoteClient {
       }
     } catch (err) {
       if (cachedAlbum) {
-        console.warn(
+        log.warn("album", 
           `相册详情刷新失败，低频入册仅本次回退已有缓存对象：album_id=${albumId}，错误=${err.name}`
         );
         return cachedAlbum;
@@ -273,7 +274,7 @@ class YikeRemoteClient {
       throw new RemoteClientError("读取目标相册详情失败，未提交入册请求。");
     }
     if (cachedAlbum) {
-      console.warn(
+      log.warn("album", 
         `相册详情未返回有效对象，低频入册仅本次回退已有缓存对象：album_id=${albumId}`
       );
       return cachedAlbum;
@@ -348,19 +349,19 @@ class YikeRemoteClient {
       const media = await this.listMedia(albumId, true);
       return media.some((m) => m.fsid === fsid);
     } catch (err) {
-      console.warn(`入册结果回读失败：album_id=${albumId}，fsid=${fsid}，错误=${err.name}`);
+      log.warn("album", `入册结果回读失败：album_id=${albumId}，fsid=${fsid}，错误=${err.name}`);
       return false;
     }
   }
 
   async _waitFor50000Visibility(albumId, fsid, fileName) {
     for (const delay of ASSOCIATION_50000_VISIBILITY_DELAYS_SECONDS) {
-      console.warn(
+      log.warn("album", 
         `addfile 返回 50000，等待 ${delay} 秒确认是否已入册：album_id=${albumId}，fsid=${fsid}，文件=${fileName}`
       );
       await sleep(delay);
       if (await this._isFsidVisibleInAlbum(albumId, fsid)) {
-        console.info(`50000 后已确认媒体实际在相册中：album_id=${albumId}，fsid=${fsid}，文件=${fileName}`);
+        log.info("album", `50000 后已确认媒体实际在相册中：album_id=${albumId}，fsid=${fsid}，文件=${fileName}`);
         return true;
       }
     }
@@ -379,12 +380,12 @@ class YikeRemoteClient {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (attempt > 1) {
         const delay = ALBUM_ASSOCIATION_RETRY_DELAYS_SECONDS[attempt - 2];
-        console.warn(
+        log.warn("album", 
           `相册关联未确认，按原顺序等待 ${delay} 秒后重试：album_id=${albumId}，fsid=${fsid}，文件=${fileName}，第 ${attempt}/${maxAttempts} 次`
         );
         await sleep(delay);
         if (await this._isFsidVisibleInAlbum(albumId, fsid)) {
-          console.info(`回读确认媒体已进入相册，无需重复 addfile：album_id=${albumId}，fsid=${fsid}`);
+          log.info("album", `回读确认媒体已进入相册，无需重复 addfile：album_id=${albumId}，fsid=${fsid}`);
           return;
         }
       }
@@ -393,7 +394,7 @@ class YikeRemoteClient {
       try {
         response = await this._appendWithProcessPacing(currentAlbum, [itemInfo]);
         this._confirmAlbumAppend(response, fileName);
-        console.debug(
+        log.debug("album", 
           `媒体已确认加入相册：album_id=${albumId}，fsid=${fsid}，文件=${fileName}，尝试=${attempt}/${maxAttempts}`
         );
         return;
@@ -401,7 +402,7 @@ class YikeRemoteClient {
         if (err instanceof RemoteClientError) {
           lastError = err;
           const summary = this._appendResponseSummary(response);
-          console.warn(
+          log.warn("album", 
             `相册关联未确认：album_id=${albumId}，fsid=${fsid}，文件=${fileName}，尝试=${attempt}/${maxAttempts}，${summary}`
           );
           if (response && typeof response === "object" && String(response.errno) === "50000") {
@@ -415,7 +416,7 @@ class YikeRemoteClient {
           lastError = new RemoteClientError(
             `将媒体加入相册：${fileName} 的请求异常：${err.name}`
           );
-          console.warn(
+          log.warn("album", 
             `相册关联请求异常：album_id=${albumId}，fsid=${fsid}，文件=${fileName}，尝试=${attempt}/${maxAttempts}，错误=${err.name}`
           );
         }
@@ -424,7 +425,7 @@ class YikeRemoteClient {
 
     // 最终回读
     if (await this._isFsidVisibleInAlbum(albumId, fsid)) {
-      console.info(`最终回读确认媒体已进入相册：album_id=${albumId}，fsid=${fsid}`);
+      log.info("album", `最终回读确认媒体已进入相册：album_id=${albumId}，fsid=${fsid}`);
       return;
     }
     throw new RemoteClientError(
@@ -446,7 +447,7 @@ class YikeRemoteClient {
     } catch (err) {
       if (response && typeof response === "object" && String(response.errno) === "50000") {
         if (await this._isFsidVisibleInAlbum(albumId, fsid)) {
-          console.info(`单文件客户端确认 50000 对应 FSID 已在相册中：album_id=${albumId}，fsid=${fsid}`);
+          log.info("album", `单文件客户端确认 50000 对应 FSID 已在相册中：album_id=${albumId}，fsid=${fsid}`);
           return;
         }
       }
@@ -477,7 +478,7 @@ class YikeRemoteClient {
     // 原地更新 API 层的 cookie 引用，不创建新 API 实例
     this._api.req.cookies = this._cookies;
     this._api.req.bdstoken = null; // bdstoken 需要用新 cookie 重新获取
-    console.debug(
+    log.debug("client", 
       `已原地更新客户端 Cookie；已解析 ${Object.keys(this._cookies).length} 个 Cookie 字段`
     );
   }
@@ -549,7 +550,7 @@ class YikeRemoteClient {
         lastError = err;
         if (attempt < ALBUM_LIST_MAX_ATTEMPTS && isTransientListError(err)) {
           const delay = ALBUM_LIST_RETRY_DELAYS_SECONDS[attempt - 1];
-          console.warn(
+          log.warn("album", 
             `相册目录读取被临时拒绝，等待 ${delay} 秒后重试（第 ${attempt}/${ALBUM_LIST_MAX_ATTEMPTS} 次）：${err.name}`
           );
           await sleep(delay);
@@ -561,7 +562,7 @@ class YikeRemoteClient {
 
     if (objects === null) {
       if (this._albumCache.length > 0) {
-        console.warn(
+        log.warn("album", 
           `相册目录刷新失败，回退使用过期缓存（${this._albumCache.length} 个相册）：${lastError ? lastError.name : "unknown"}`
         );
         return [...this._albumCache];
@@ -591,7 +592,7 @@ class YikeRemoteClient {
     this._albumCache = result;
     this._albumCacheAt = now;
 
-    console.debug(`云端相册目录从服务器读取完成：${result.length} 个相册`);
+    log.debug("album", `云端相册目录从服务器读取完成：${result.length} 个相册`);
     return [...result];
   }
 
@@ -625,7 +626,7 @@ class YikeRemoteClient {
         lastError = err;
         if (attempt < LIST_MAX_ATTEMPTS && isTransientListError(err)) {
           const delay = LIST_TRANSIENT_RETRY_DELAYS_SECONDS[attempt - 1];
-          console.warn(
+          log.warn("album", 
             `相册媒体列表读取被临时拒绝，等待 ${delay} 秒后重试（第 ${attempt}/${LIST_MAX_ATTEMPTS} 次）：album_id=${albumId}，错误=${err.name}`
           );
           await sleep(delay);
@@ -638,7 +639,7 @@ class YikeRemoteClient {
     if (objects === null) {
       const staleCached = this._mediaCache.get(albumId);
       if (staleCached) {
-        console.warn(
+        log.warn("album", 
           `相册媒体刷新失败，回退使用过期缓存：album_id=${albumId}，媒体数=${staleCached[1].length}，错误=${lastError ? lastError.name : "unknown"}`
         );
         return [...staleCached[1]];
@@ -680,7 +681,7 @@ class YikeRemoteClient {
     result.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     this._mediaCache.set(albumId, [now, result]);
 
-    console.debug(`相册媒体列表从服务器读取完成：album_id=${albumId}，媒体数=${result.length}`);
+    log.debug("album", `相册媒体列表从服务器读取完成：album_id=${albumId}，媒体数=${result.length}`);
     return [...result];
   }
 
@@ -812,7 +813,7 @@ class YikeRemoteClient {
 
     const response = await this._appendWithProcessPacing(albumInfo, itemInfos);
     const errno = response && typeof response === "object" ? String(response.errno) : "unknown";
-    console.info(
+    log.info("album", 
       `主控制器低频批量入册已提交：album_id=${albumId}，数量=${itemInfos.length}，errno=${errno}`
     );
 
@@ -832,7 +833,7 @@ class YikeRemoteClient {
         const media = await this.listMedia(albumId, true);
         const visible = new Set(media.map((m) => m.fsid));
         confirmed = new Set(requested.filter((f) => visible.has(f)));
-        console.info(
+        log.info("album", 
           `批量入册可见性核对：album_id=${albumId}，提交=${requested.length}，已可见=${confirmed.size}，等待=${delay}秒`
         );
         if (confirmed.size === requested.length) break;
@@ -890,7 +891,7 @@ class YikeRemoteClient {
     }
     const fileName = (itemInfo.path || "").split("/").pop() || `${fsid}`;
     fs.mkdirSync(targetDirectory, { recursive: true });
-    console.debug(`开始下载：album_id=${albumId}，fsid=${fsid}，目标目录=${targetDirectory}`);
+    log.debug("media", `开始下载：album_id=${albumId}，fsid=${fsid}，目标目录=${targetDirectory}`);
     try {
       await this._api.downloadFile(itemInfo, targetDirectory, fileName, true);
     } catch (err) {
