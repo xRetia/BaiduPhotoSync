@@ -65,9 +65,30 @@ function isBaiduDomain(domain) {
   return d === "baidu.com" || d.endsWith(".baidu.com");
 }
 
+// 清除指定 partition 的百度 Cookie（对齐 Python 版销毁整个 off-the-record profile）。
+// 命名 partition 在应用会话内会驻留内存，登出/断开后必须主动清空，否则残留 BDUSS
+// 可能在下次连接时污染会话、甚至被误判为已登录。
+function clearPartitionCookies(partitionName) {
+  return new Promise((resolve) => {
+    try {
+      session
+        .fromPartition(partitionName)
+        .clearStorageData({ storages: ["cookies"] })
+        .then(() => resolve())
+        .catch(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
 async function startKeepalive(cookieJson, enhanced) {
   stopKeepalive();
   if (!cookieJson) return;
+
+  // 每次连接都重建干净的 keepalive 会话（对齐 Python 版：stop() 销毁旧 profile 后新建）
+  // 避免上次会话残留的 BDUSS 滞留在同一命名 partition 中。
+  await clearPartitionCookies("keepalive");
 
   keepaliveEnhanced = Boolean(enhanced);
   keepaliveActive = true;
@@ -190,6 +211,8 @@ function refreshKeepaliveCookie(ses) {
 
 function stopKeepalive() {
   keepaliveActive = false;
+  // 清空 keepalive partition 的百度 Cookie，避免登出/断开后残留凭据
+  clearPartitionCookies("keepalive");
   if (keepaliveCookieDebounceTimer) {
     clearTimeout(keepaliveCookieDebounceTimer);
     keepaliveCookieDebounceTimer = null;
@@ -510,6 +533,15 @@ function createQRLoginWindow() {
           .filter((c) => c.domain && c.domain.includes("baidu.com"))
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain }))
       );
+      // 防御：必要时核心 Cookie 缺失则放弃本次提交并允许重试，
+      // 避免把不完整的 Cookie 发给渲染进程反复验证失败（“获取不到 cookie”）。
+      let parsed = [];
+      try { parsed = JSON.parse(cookieJson); } catch { parsed = []; }
+      const names = new Set(parsed.map((c) => c.name));
+      if (!REQUIRED_COOKIES.every((n) => names.has(n))) {
+        submitted = false;
+        return;
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("qr-login-cookie", cookieJson);
       }
@@ -724,12 +756,14 @@ function createLogoutWindow(cookieJson) {
 
     const ses = logoutWindow.webContents.session;
     let logoutTimeoutTimer = null;
+    let logoutCheckTimer = null;
     let resolved = false;
 
     function finish(result) {
       if (resolved) return;
       resolved = true;
       if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
+      if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
       if (injectInterval) { clearInterval(injectInterval); injectInterval = null; }
       if (logoutWindow && !logoutWindow.isDestroyed()) {
         logoutWindow.destroy();
@@ -755,12 +789,24 @@ function createLogoutWindow(cookieJson) {
         finish({ success: true });
       }
     });
-    // BDUSS cookie 被移除 = 登出成功（对齐 Python 版检测逻辑）
-    ses.cookies.on("changed", (_e, cookie, cause, removed) => {
-      if (cookie.name === "BDUSS" && removed) {
-        console.debug("登出：BDUSS cookie 已被移除，登出成功");
-        finish({ success: true });
-      }
+    // 登出成功 = BDUSS 从会话中消失（对齐 Python 版 _check_logout_state：
+    // 监听 cookie 变化后检查认证 Cookie 是否仍在）。
+    // 注意：Electron 的 cookies.on('changed') 没有第 4 个 removed 参数，
+    // 因此用轮询判断 BDUSS 是否还存在，而不是依赖事件。
+    function checkBdussGone() {
+      ses.cookies.get({}).then((cookies) => {
+        const stillLoggedIn = cookies.some(
+          (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
+        );
+        if (!stillLoggedIn) {
+          console.debug("登出：BDUSS cookie 已消失，登出成功");
+          finish({ success: true });
+        }
+      }).catch(() => {});
+    }
+    ses.cookies.on("changed", () => {
+      // cookie 变化即触发一次检查（轻量，真正判定交给 checkBdussGone）
+      checkBdussGone();
     });
 
     let injectInterval = null;
@@ -846,6 +892,16 @@ function createLogoutWindow(cookieJson) {
       // 加载百度相册首页
       console.debug(`登出：加载 ${LOGOUT_HOME_URL}`);
       logoutWindow.loadURL(LOGOUT_HOME_URL);
+
+      // 轮询检测 BDUSS 是否消失（对齐 Python 版：cookie 移除即登出成功）。
+      // 即使百度通过 SPA 退出而未发生整页跳转，也能可靠判定登出。
+      logoutCheckTimer = setInterval(() => {
+        if (!logoutWindow || logoutWindow.isDestroyed()) {
+          if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
+          return;
+        }
+        checkBdussGone();
+      }, 1000);
 
       // 30 秒超时
       logoutTimeoutTimer = setTimeout(() => {
@@ -984,12 +1040,16 @@ async function handleMethod(method, params, sender) {
     return { done: true };
   }
 
-  if (method === "reset_application") {
+   if (method === "reset_application") {
     stopKeepalive();
     if (syncWorker) {
       syncWorker.terminate();
       syncWorker = null;
     }
+    // 清空各命名 partition 的百度 Cookie，避免重置后仍残留会话凭据
+    await clearPartitionCookies("keepalive");
+    await clearPartitionCookies("qr-login");
+    await clearPartitionCookies("logout");
     remove_application_data();
     try { fs.unlinkSync(path.join(ROOT, "error.log")); } catch {}
     sessionStore.clear();
@@ -1421,7 +1481,15 @@ ipcMain.handle("logout:start", async () => {
   // 不提前 stopKeepalive，等用户确认登出成功后才停止
   const result = await createLogoutWindow(currentCookieJson);
   if (result.success) {
+    // 登出成功：彻底清理本地凭据，避免残留 Cookie 导致下次启动又被“自动登录”。
+    // - 停止保活并清空 keepalive partition 的百度 Cookie
+    // - 清空本次登出窗口所在 partition 的百度 Cookie
+    // - 清除持久化的会话存储（对齐 Python 版：profile 销毁即 Cookie 消失）
     stopKeepalive();
+    await clearPartitionCookies("logout");
+    sessionStore.clear();
+    client = null;
+    cookieText = "";
   }
   return result;
 });
