@@ -4,6 +4,22 @@
 
 const $ = (id) => document.getElementById(id);
 
+// 应用主题到同步结果窗口（读取保存的 theme_pref）
+async function initTheme() {
+  try {
+    const settings = await window.api.call("get_settings");
+    const pref = settings.theme_pref || "auto";
+    let theme = pref;
+    if (pref === "auto") {
+      theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    document.documentElement.setAttribute("data-theme", theme);
+  } catch (err) {
+    // 读取失败保持默认（暗色）
+    console.error("Init theme failed:", err);
+  }
+}
+
 // 接收主进程传来的同步结果数据
 window.api.onSyncResultData((data) => {
   renderResult(data);
@@ -77,3 +93,6 @@ $("btnCopy").addEventListener("click", async () => {
     alert("复制失败：" + (err.message || err));
   }
 });
+
+// 初始化主题
+initTheme();

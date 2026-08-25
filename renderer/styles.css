@@ -1,25 +1,102 @@
-/* === 一刻同步 - Electron 全新 UI === */
+/* === 一刻同步 - Electron 全新 UI ===
+   主题体系：默认暗色主题 + 亮色主题覆盖
+   - dark 主题变量在 :root 定义（默认）
+   - light 主题变量在 [data-theme="light"] 定义
+   - 自动模式由 JS 判断系统偏好，在 <html data-theme="..."> 上落地
+   高亮色（亮色主题）：
+   --hl-1: #F56EE2（粉）
+   --hl-2: #2C95FF（蓝）
+   --hl-3: #01E3F8（青）
+*/
 
 :root {
-  --ink: #1a1d2e;
-  --ink-2: #475069;
+  --ink: #e8ecf3;
+  --ink-2: #b6c0d0;
   --ink-3: #8895a8;
-  --paper: #fafbfc;
-  --mist: #f1f5f9;
-  --line: #e2e8f0;
-  --line-light: #f0f4f8;
+  --paper: #131622;
+  --mist: #1c2230;
+  --mist-2: #232b3d;
+  --line: #2a3347;
+  --line-light: #232b3d;
   --accent: #3b82f6;
-  --accent-dark: #2563eb;
-  --accent-light: #dbeafe;
+  --accent-dark: #60a5fa;
+  --accent-light: rgba(59,130,246,0.16);
   --accent-warm: #f59e0b;
-  --accent-warm-light: #fef3c7;
-  --danger: #ef4444;
-  --danger-light: #fee2e2;
-  --success: #22c55e;
+  --accent-warm-light: rgba(245,158,11,0.16);
+  --danger: #f87171;
+  --danger-light: rgba(248,113,113,0.16);
+  --success: #34d399;
+  --success-light: rgba(52,211,153,0.16);
+  /* 高亮三色（暗色主题下作为进度条渐变） */
+  --hl-1: #F56EE2;
+  --hl-2: #2C95FF;
+  --hl-3: #01E3F8;
   --radius: 10px;
   --radius-sm: 6px;
   --font: "Inter", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   --mono: "SF Mono", "Cascadia Code", "Consolas", monospace;
+  --sidebar-bg: #10141f;
+  --surface: #141a28;
+  --surface-solid: #141a28;
+  --shadow: 0 8px 24px rgba(0,0,0,0.5);
+  --toast-bg: #1c2230;
+  --overlay-bg: rgba(10,18,34,0.97);
+  /* 侧边栏专用变量（暗色：深底浅字） */
+  --sidebar-text: #e8ecf3;
+  --sidebar-nav: #8895a8;
+  --sidebar-nav-hover-text: #c5d0e0;
+  --sidebar-nav-hover-bg: rgba(255,255,255,0.06);
+  --sidebar-nav-active-text: #fff;
+  --sidebar-border: rgba(255,255,255,0.08);
+  --sidebar-btn-border: rgba(255,255,255,0.12);
+  --sidebar-btn-text: #c5d0e0;
+  --sidebar-btn-hover-bg: rgba(255,255,255,0.08);
+  --sidebar-btn-hover-text: #fff;
+  --sidebar-toggle-border: rgba(255,255,255,0.18);
+  --connected-bg: rgba(1,227,248,0.12);
+}
+
+/* 亮色主题：白浅灰背景 + 三色高亮 */
+[data-theme="light"] {
+  --ink: #1a1d2e;
+  --ink-2: #475069;
+  --ink-3: #8895a8;
+  --paper: #ffffff;
+  --mist: #f1f5f9;
+  --mist-2: #e6edf6;
+  --line: #e2e8f0;
+  --line-light: #f0f4f8;
+  --accent: #2C95FF;
+  --accent-dark: #1a7fe8;
+  --accent-light: rgba(44,149,255,0.12);
+  --accent-warm: #F56EE2;
+  --accent-warm-light: rgba(245,110,226,0.14);
+  --danger: #ef4444;
+  --danger-light: #fee2e2;
+  --success: #22c55e;
+  --success-light: #dcfce7;
+  /* 高亮三色（亮色主题主色） */
+  --hl-1: #F56EE2;
+  --hl-2: #2C95FF;
+  --hl-3: #01E3F8;
+  --sidebar-bg: #f1f5f9;
+  --surface-solid: #ffffff;
+  --shadow: 0 8px 24px rgba(0,0,0,0.12);
+  --toast-bg: #ffffff;
+  --overlay-bg: rgba(255,255,255,0.97);
+  /* 侧边栏专用变量（亮色：浅底深字） */
+  --sidebar-text: #1a1d2e;
+  --sidebar-nav: #475069;
+  --sidebar-nav-hover-text: #1a1d2e;
+  --sidebar-nav-hover-bg: rgba(0,0,0,0.06);
+  --sidebar-nav-active-text: #1a1d2e;
+  --sidebar-border: rgba(0,0,0,0.08);
+  --sidebar-btn-border: rgba(0,0,0,0.12);
+  --sidebar-btn-text: #475069;
+  --sidebar-btn-hover-bg: rgba(0,0,0,0.06);
+  --sidebar-btn-hover-text: #1a1d2e;
+  --sidebar-toggle-border: rgba(0,0,0,0.18);
+  --connected-bg: rgba(1,227,248,0.10);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -44,7 +121,7 @@ body {
 #sidebar {
   width: 208px;
   flex-shrink: 0;
-  background: var(--ink);
+  background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
   padding: 20px 0;
@@ -63,7 +140,7 @@ body {
   align-items: center;
   gap: 10px;
   padding: 0 24px 24px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .sidebar-logo img {
@@ -74,7 +151,7 @@ body {
 }
 
 .logo-text {
-  color: #e8ecf3;
+  color: var(--sidebar-text);
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.3px;
@@ -91,7 +168,7 @@ body {
   gap: 12px;
   padding: 10px 16px;
   border-radius: var(--radius-sm);
-  color: #8895a8;
+  color: var(--sidebar-nav);
   cursor: pointer;
   font-size: 14px;
   transition: all 0.15s;
@@ -101,11 +178,11 @@ body {
 
 .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
 
-.nav-item:hover { color: #c5d0e0; background: rgba(255,255,255,0.04); }
+.nav-item:hover { color: var(--sidebar-nav-hover-text); background: var(--sidebar-nav-hover-bg); }
 
 .nav-item.active {
-  color: #fff;
-  background: rgba(59,130,246,0.15);
+  color: var(--sidebar-nav-active-text);
+  background: var(--accent-light);
 }
 
 .nav-item.active::before {
@@ -121,22 +198,28 @@ body {
   box-shadow: 0 0 8px var(--accent);
 }
 
+/* === Sidebar footer === */
 .sidebar-footer {
-  padding: 16px 16px 4px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  padding: 16px 16px 0;
+  border-top: 1px solid var(--sidebar-border);
+}
+
+.sidebar-footer-row {
+  display: flex;
+  gap: 6px;
 }
 
 .connect-btn {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid var(--sidebar-btn-border);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: #c5d0e0;
+  color: var(--sidebar-btn-text);
   cursor: pointer;
   font-size: 13px;
   transition: all 0.15s;
@@ -144,13 +227,62 @@ body {
 
 .connect-btn svg { width: 18px; height: 18px; }
 
-.connect-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.connect-btn:hover { background: var(--sidebar-btn-hover-bg); color: var(--sidebar-btn-hover-text); }
 
 .connect-btn.connected {
-  border-color: var(--success);
-  color: var(--success);
-  background: rgba(34,197,94,0.1);
+  border-color: var(--hl-3);
+  color: var(--hl-3);
+  background: var(--connected-bg);
 }
+
+/* 亮色主题下已登录按钮降饱和度，避免刺眼 */
+[data-theme="light"] .connect-btn.connected {
+  border-color: #0aa8c0;
+  color: #0aa8c0;
+  background: rgba(10,168,192,0.08);
+}
+
+/* === Sidebar toggle button === */
+.sidebar-toggle-btn {
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border: 1px solid var(--sidebar-toggle-border);
+  border-radius: var(--radius-sm);
+  background: var(--sidebar-nav-hover-bg);
+  color: var(--sidebar-nav-hover-text);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sidebar-toggle-btn svg { width: 18px; height: 18px; transition: transform 0.2s ease; }
+
+.sidebar-toggle-btn:hover { background: var(--sidebar-btn-hover-bg); color: var(--sidebar-btn-hover-text); }
+
+/* === Sidebar collapsed state === */
+#sidebar.collapsed { width: 56px; }
+
+#sidebar.collapsed .logo-text,
+#sidebar.collapsed .nav-item span,
+#sidebar.collapsed .connect-btn span { display: none; }
+
+#sidebar.collapsed .sidebar-logo { padding: 0 0 20px; justify-content: center; }
+#sidebar.collapsed .nav-items { padding: 16px 0; }
+#sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+  margin: 0 8px 4px;
+}
+#sidebar.collapsed .nav-item.active::before { left: -8px; }
+
+/* 折叠后按钮上下排列，保持边框 */
+#sidebar.collapsed .sidebar-footer { padding: 12px 8px 4px; }
+#sidebar.collapsed .sidebar-footer-row { flex-direction: column; gap: 6px; }
+#sidebar.collapsed .connect-btn { padding: 10px 0; }
+#sidebar.collapsed .sidebar-toggle-btn { padding: 10px 0; }
+#sidebar.collapsed .sidebar-toggle-btn svg { transform: rotate(180deg); }
 
 /* === Top bar === */
 #topbar {
@@ -171,7 +303,68 @@ body {
   color: var(--ink);
 }
 
-.topbar-right { display: flex; gap: 4px; }
+.topbar-right { display: flex; gap: 4px; align-items: center; }
+
+/* === Theme switcher === */
+.theme-switcher {
+  position: relative;
+  display: inline-flex;
+}
+
+.theme-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  color: var(--ink-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.theme-btn svg { width: 18px; height: 18px; }
+
+.theme-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.theme-menu {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  min-width: 150px;
+  background: var(--toast-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 9999;
+  display: none;
+}
+
+.theme-menu.open { display: block; }
+
+.theme-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+  transition: background 0.1s;
+}
+
+.theme-menu-item:hover { background: var(--mist); }
+.theme-menu-item.active { color: var(--accent); background: var(--accent-light); font-weight: 600; }
+
+.theme-menu-item svg { width: 16px; height: 16px; }
 
 /* === Tab panels === */
 .tab-panel {
@@ -189,7 +382,7 @@ body {
   height: 36px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink-2);
   cursor: pointer;
   display: flex;
@@ -213,7 +406,7 @@ body {
   height: 30px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink-2);
   cursor: pointer;
   display: inline-flex;
@@ -237,7 +430,7 @@ body {
   padding: 7px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink);
   cursor: pointer;
   font-size: 13px;
@@ -260,7 +453,7 @@ body {
   padding: 5px 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink);
   font-size: 12px;
   cursor: pointer;
@@ -272,7 +465,7 @@ body {
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink);
   font-size: 13px;
   outline: none;
@@ -497,7 +690,23 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: #fff;
+  background: var(--surface-solid);
+}
+
+/* === 框选橡皮筋 === */
+#selectionRect {
+  position: fixed;
+  border: 1px solid var(--accent);
+  background: var(--accent-light);
+  opacity: 0.35;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+/* 拖拽框选期间禁用文本选中 */
+#mediaDetailView.selecting, #mediaThumbnailView.selecting {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .selection-bar {
@@ -601,10 +810,10 @@ body {
 /* === Context menu === */
 .context-menu {
   position: fixed;
-  background: #fff;
+  background: var(--toast-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  box-shadow: var(--shadow);
   padding: 6px;
   z-index: 9999;
   min-width: 180px;
@@ -615,6 +824,7 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
+  color: var(--ink);
   transition: background 0.1s;
 }
 
@@ -629,7 +839,7 @@ body {
 
 .help-disclaimer {
   background: var(--accent-warm-light);
-  color: #92400e;
+  color: var(--accent-warm);
   padding: 10px 16px;
   border-radius: var(--radius-sm);
   margin-bottom: 24px;
@@ -698,18 +908,16 @@ body {
 #progressFill {
   height: 100%;
   width: 0;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--hl-1), var(--hl-2) 50%, var(--hl-3));
   border-radius: 2px;
   transition: width 0.2s;
 }
-
-
 
 /* === Loading overlay === */
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(250,251,252,0.97);
+  background: var(--overlay-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -776,7 +984,7 @@ body {
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 500;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  box-shadow: var(--shadow);
   transition: opacity 0.3s;
   max-width: 360px;
   display: flex;
@@ -784,7 +992,7 @@ body {
   gap: 8px;
 }
 
-.toast.info { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+.toast.info { background: var(--toast-bg); color: var(--ink); border: 1px solid var(--line); }
 .toast.error { background: var(--danger); color: #fff; }
 .toast.warning { background: var(--accent-warm); color: #fff; }
 

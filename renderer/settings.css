@@ -1,25 +1,50 @@
-/* === 设置窗口样式 === */
+/* === 设置窗口样式（暗色默认 + 亮色覆盖） === */
 
 :root {
-  --ink: #1a1d2e;
-  --ink-2: #475069;
+  --ink: #e8ecf3;
+  --ink-2: #b6c0d0;
   --ink-3: #8895a8;
-  --paper: #fafbfc;
-  --mist: #f1f5f9;
-  --line: #e2e8f0;
-  --line-light: #f0f4f8;
+  --paper: #131622;
+  --mist: #1c2230;
+  --mist-2: #232b3d;
+  --line: #2a3347;
+  --line-light: #232b3d;
   --accent: #3b82f6;
-  --accent-dark: #2563eb;
-  --accent-light: #dbeafe;
+  --accent-dark: #60a5fa;
+  --accent-light: rgba(59,130,246,0.16);
   --accent-warm: #f59e0b;
-  --accent-warm-light: #fef3c7;
-  --danger: #ef4444;
-  --danger-light: #fee2e2;
-  --success: #22c55e;
+  --accent-warm-light: rgba(245,158,11,0.16);
+  --danger: #f87171;
+  --danger-light: rgba(248,113,113,0.16);
+  --success: #34d399;
+  --success-light: rgba(52,211,153,0.16);
   --radius: 10px;
   --radius-sm: 6px;
   --font: "Inter", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   --mono: "SF Mono", "Cascadia Code", "Consolas", monospace;
+  --surface-solid: #141a28;
+}
+
+/* 亮色主题：白浅灰背景 + 三色高亮 */
+[data-theme="light"] {
+  --ink: #1a1d2e;
+  --ink-2: #475069;
+  --ink-3: #8895a8;
+  --paper: #ffffff;
+  --mist: #f1f5f9;
+  --mist-2: #e6edf6;
+  --line: #e2e8f0;
+  --line-light: #f0f4f8;
+  --accent: #2C95FF;
+  --accent-dark: #1a7fe8;
+  --accent-light: rgba(44,149,255,0.12);
+  --accent-warm: #F56EE2;
+  --accent-warm-light: rgba(245,110,226,0.14);
+  --danger: #ef4444;
+  --danger-light: #fee2e2;
+  --success: #22c55e;
+  --success-light: #dcfce7;
+  --surface-solid: #ffffff;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -71,11 +96,11 @@ body {
 
 .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 
-.nav-item:hover { background: rgba(59,130,246,0.06); color: var(--ink); }
+.nav-item:hover { background: rgba(59,130,246,0.1); color: var(--ink); }
 
 .nav-item.active {
   background: var(--accent-light);
-  color: var(--accent-dark);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -127,7 +152,7 @@ body {
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink);
   font-size: 13px;
   font-family: var(--font);
@@ -181,7 +206,7 @@ body {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--surface-solid);
   max-width: 520px;
 }
 
@@ -211,7 +236,7 @@ body {
   padding: 8px 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--ink);
   font-size: 13px;
   font-weight: 500;
@@ -225,7 +250,7 @@ body {
   padding: 8px 16px;
   border: 1px solid var(--danger-light);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--surface-solid);
   color: var(--danger);
   font-size: 13px;
   font-weight: 500;

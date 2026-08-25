@@ -59,22 +59,22 @@ function showPrompt(message, defaultValue = "") {
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:1000000;display:flex;align-items:center;justify-content:center;font-family:Microsoft YaHei,sans-serif;";
     const card = document.createElement("div");
-    card.style.cssText = "background:#fff;border-radius:10px;padding:22px 24px;width:320px;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,0.2);";
+    card.style.cssText = `background:${cssVar("--toast-bg", "#fff")};border-radius:10px;padding:22px 24px;width:320px;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,0.2);border:1px solid ${cssVar("--line", "#e2e8f0")};`;
     const msg = document.createElement("div");
     msg.textContent = message;
-    msg.style.cssText = "font-size:14px;color:#2d3748;margin-bottom:14px;white-space:pre-line;line-height:1.6;";
+    msg.style.cssText = `font-size:14px;color:${cssVar("--ink", "#2d3748")};margin-bottom:14px;white-space:pre-line;line-height:1.6;`;
     const input = document.createElement("input");
     input.type = "text";
     input.value = defaultValue || "";
-    input.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid #cbd5e0;border-radius:6px;outline:none;";
+    input.style.cssText = `width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid ${cssVar("--line", "#cbd5e0")};border-radius:6px;outline:none;background:${cssVar("--surface-solid", "#fff")};color:${cssVar("--ink", "#1a1d2e")};`;
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:10px;margin-top:18px;";
     const cancel = document.createElement("button");
     cancel.textContent = "取消";
-    cancel.style.cssText = "padding:7px 16px;font-size:13px;border:1px solid #cbd5e0;background:#fff;border-radius:6px;cursor:pointer;color:#4a5568;";
+    cancel.style.cssText = `padding:7px 16px;font-size:13px;border:1px solid ${cssVar("--line", "#cbd5e0")};background:${cssVar("--surface-solid", "#fff")};border-radius:6px;cursor:pointer;color:${cssVar("--ink-2", "#4a5568")};`;
     const ok = document.createElement("button");
     ok.textContent = "确定";
-    ok.style.cssText = "padding:7px 16px;font-size:13px;border:none;background:#2577d9;color:#fff;border-radius:6px;cursor:pointer;";
+    ok.style.cssText = `padding:7px 16px;font-size:13px;border:none;background:${cssVar("--accent", "#2577d9")};color:#fff;border-radius:6px;cursor:pointer;`;
     const cleanup = () => overlay.remove();
     ok.onclick = () => { const v = input.value; cleanup(); resolve(v); };
     cancel.onclick = () => { cleanup(); resolve(null); };
@@ -137,6 +137,100 @@ async function bridge(method, params = {}) {
 
 // --- Timing helpers ---
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- Theme system ---
+// themePref: "light" | "dark" | "auto"（用户选择，持久化到设置）
+// 落地：html[data-theme] = "light" | "dark"（auto 根据系统偏好解析）
+const THEME_PREF_KEY = "theme_pref";
+
+// 读取当前生效主题下的 CSS 变量（供 JS 动态创建的控件适配主题）
+function cssVar(name, fallback = "") {
+  const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return val || fallback;
+}
+
+const THEME_ICONS = {
+  light: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>',
+  dark: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 13.5A6.5 6.5 0 1 1 6.5 4a6.5 6.5 0 0 0 9.5 9.5z"/></svg>',
+  auto: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2v1.5M10 16.5V18M2 10h1.5M16.5 10H18M4.2 4.2l1 1M14.8 14.8l1 1M15.8 4.2l-1 1M5.2 14.8l-1 1"/><circle cx="10" cy="10" r="3"/></svg>',
+};
+
+function resolveTheme(pref) {
+  if (pref === "light" || pref === "dark") return pref;
+  // auto：跟随系统
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
+  return "dark";
+}
+
+function applyTheme(pref) {
+  const theme = resolveTheme(pref);
+  document.documentElement.setAttribute("data-theme", theme);
+  const icon = $("themeIcon");
+  if (icon) icon.innerHTML = THEME_ICONS[pref === "auto" ? "auto" : theme];
+  // 高亮菜单选中态
+  document.querySelectorAll(".theme-menu-item").forEach((item) => {
+    item.classList.toggle("active", item.dataset.themeOpt === pref);
+  });
+}
+
+function setThemePref(pref) {
+  state.themePref = pref;
+  applyTheme(pref);
+  // 持久化到设置
+  bridge("save_settings", { theme_pref: pref }).catch(() => {});
+}
+
+function initTheme() {
+  // 读取已保存的主题偏好（state.settings 已在 init 加载），默认 auto
+  const pref = (state.settings && state.settings.theme_pref) || "auto";
+  state.themePref = pref;
+  applyTheme(pref);
+  // 绑定切换按钮
+  const themeBtn = $("btnTheme");
+  const themeMenu = $("themeMenu");
+  if (themeBtn) {
+    themeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      themeMenu.classList.toggle("open");
+    });
+  }
+  document.querySelectorAll(".theme-menu-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      const opt = item.dataset.themeOpt;
+      if (opt) setThemePref(opt);
+      themeMenu.classList.remove("open");
+    });
+  });
+  // 点击其他地方关闭菜单
+  document.addEventListener("click", () => { themeMenu.classList.remove("open"); });
+  // 系统主题变化时自动跟随
+  if (window.matchMedia) {
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => { if (state.themePref === "auto") applyTheme("auto"); };
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
+}
+
+// --- Sidebar collapse/expand ---
+// 折叠状态持久化到 settings.sidebar_collapsed
+function initSidebarToggle() {
+  const sidebar = $("sidebar");
+  const toggleBtn = $("btnSidebarToggle");
+  if (!sidebar || !toggleBtn) return;
+  const collapsed = state.settings && state.settings.sidebar_collapsed === true;
+  if (collapsed) {
+    sidebar.classList.add("collapsed");
+    toggleBtn.title = "展开侧边栏";
+  } else {
+    toggleBtn.title = "折叠侧边栏";
+  }
+  toggleBtn.addEventListener("click", () => {
+    const isCollapsed = sidebar.classList.toggle("collapsed");
+    toggleBtn.title = isCollapsed ? "展开侧边栏" : "折叠侧边栏";
+    bridge("save_settings", { sidebar_collapsed: isCollapsed }).catch(() => {});
+  });
+}
 
 // 启动 splash 最短展示时长：即便登录瞬间完成也要显示满 1500ms，避免闪烁。
 const SPLASH_MIN_MS = 1500;
@@ -321,15 +415,15 @@ function showLoginLoading() {
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.id = "login-loading-overlay";
-    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.95);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;";
+    overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:${cssVar("--overlay-bg", "rgba(255,255,255,0.95)")};z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;`;
     const title = document.createElement("div");
     title.textContent = "正在登录，请稍候";
-    title.style.cssText = "font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;";
+    title.style.cssText = `font-size:22px;font-weight:700;color:${cssVar("--accent", "#1d63bf")};margin-bottom:12px;`;
     const hint = document.createElement("div");
     hint.textContent = "正在验证一刻相册访问权限，请勿关闭窗口。";
-    hint.style.cssText = "font-size:14px;color:#718096;margin-bottom:24px;";
+    hint.style.cssText = `font-size:14px;color:${cssVar("--ink-3", "#718096")};margin-bottom:24px;`;
     const spinner = document.createElement("div");
-    spinner.style.cssText = "width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;";
+    spinner.style.cssText = `width:36px;height:36px;border:3px solid ${cssVar("--line", "#e0e8f5")};border-top-color:${cssVar("--accent", "#2577d9")};border-radius:50%;animation:yike-spin 0.8s linear infinite;`;
     const style = document.createElement("style");
     style.textContent = "@keyframes yike-spin{to{transform:rotate(360deg)}}";
     overlay.appendChild(style);
@@ -519,6 +613,142 @@ function updateMediaSelectionName() {
   else if (selectedNames.length > 1) { label.textContent = `已选择 ${selectedNames.length} 个媒体`; label.style.display = "block"; }
   else { label.textContent = ""; label.style.display = "none"; }
 }
+
+// === 框选辅助 ===
+// 返回目标元素对应的"照片本体"（缩略图磁贴或表格行）；点击这些元素本身时沿用原有
+// 单击/双击/Ctrl 多选逻辑，只有点击空白区域才启动框选。
+function selectionRectOf(target) {
+  const mode = $("mediaViewMode").value;
+  if (mode === "thumbnails") {
+    const tile = target && target.closest ? target.closest(".thumb-tile") : null;
+    // 已加载缩略图时以磁贴为锚点（空白处更精确地框住相邻照片）
+    if (tile && tile.querySelector(".thumb-image")) return tile;
+    return null;
+  }
+  const row = target && target.closest ? target.closest("tr") : null;
+  return row && row.dataset.fsid !== undefined ? row : null;
+}
+
+function initSelectionRect() {
+  const detailView = $("mediaDetailView");
+  const thumbView = $("mediaThumbnailView");
+  if (!detailView || !thumbView) return;
+
+  let rect = null;
+  let dragging = false;
+  let additive = false;
+  let origin = null;
+  let cur = null;
+  let activeView = null;
+  let rafPending = false;
+
+  function initRect() {
+    rect = el("div");
+    rect.id = "selectionRect";
+    rect.style.display = "none";
+    document.body.appendChild(rect);
+  }
+
+  function getTiles() {
+    if (activeView === thumbView) return Array.from($("thumbnailGrid").querySelectorAll(".thumb-tile"));
+    return Array.from($("mediaTableBody").querySelectorAll("tr"));
+  }
+
+  function intersects(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  // 框选过程中给命中的磁贴/行实时加选中态
+  function applySelection() {
+    const sel = rect.getBoundingClientRect();
+    getTiles().forEach((t) => {
+      const hit = intersects(sel, t.getBoundingClientRect());
+      if (additive) {
+        if (hit) t.classList.add("selected");
+      } else {
+        t.classList.toggle("selected", hit);
+      }
+    });
+  }
+
+  function renderSelection() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      if (!dragging || !rect || !rect.isConnected) { if (rect) rect.style.display = "none"; return; }
+      const mode = $("mediaViewMode").value;
+      // 视图被切换或框选元素被移除时中止绘制
+      if ((mode === "thumbnails" && activeView !== thumbView) || (mode === "details" && activeView !== detailView)) {
+        rect.style.display = "none";
+        return;
+      }
+      const viewRect = activeView.getBoundingClientRect();
+      const sel = {
+        left: Math.min(origin.x, cur.x),
+        top: Math.min(origin.y, cur.y),
+        right: Math.max(origin.x, cur.x),
+        bottom: Math.max(origin.y, cur.y),
+      };
+      // 裁剪到视图可视区域内
+      const left = Math.max(sel.left, viewRect.left);
+      const top = Math.max(sel.top, viewRect.top);
+      const right = Math.min(sel.right, viewRect.right);
+      const bottom = Math.min(sel.bottom, viewRect.bottom);
+      if (right <= left || bottom <= top) { rect.style.display = "none"; return; }
+      rect.style.display = "block";
+      rect.style.left = left + "px";
+      rect.style.top = top + "px";
+      rect.style.width = (right - left) + "px";
+      rect.style.height = (bottom - top) + "px";
+      applySelection();
+    });
+  }
+
+  function startDrag(e, mode) {
+    const view = mode === "thumbnails" ? thumbView : detailView;
+    dragging = true;
+    additive = e.ctrlKey || e.metaKey || e.shiftKey;
+    origin = { x: e.clientX, y: e.clientY };
+    cur = { ...origin };
+    activeView = view;
+    if (!rect) initRect();
+    rect.style.display = "none";
+    view.classList.add("selecting");
+    renderSelection();
+    e.preventDefault();
+  }
+
+  function onMouseDown(e) {
+    if (e.button !== 0) return;
+    const mode = $("mediaViewMode").value;
+    const view = mode === "thumbnails" ? thumbView : detailView;
+    if (selectionRectOf(e.target)) return; // 点中元素本体，走原有点击/双击逻辑
+    // 只在当前激活视图内部空白处启动框选，避免跨 tab 误触
+    if (e.target.closest && !e.target.closest("#" + view.id)) return;
+    startDrag(e, mode);
+  }
+
+  function onMouseMove(e) {
+    if (!dragging) return;
+    cur = { x: e.clientX, y: e.clientY };
+    renderSelection();
+  }
+
+  function onMouseUp() {
+    if (!dragging) return;
+    dragging = false;
+    if (rect) rect.style.display = "none";
+    if (activeView) activeView.classList.remove("selecting");
+    updateMediaSelectionName();
+    activeView = null;
+  }
+
+  [detailView, thumbView].forEach((v) => v.addEventListener("mousedown", onMouseDown));
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+}
+initSelectionRect();
 
 // === Lazy thumbnails ===
 let scrollThrottleTimer = null;
@@ -1064,15 +1294,15 @@ function showLogoutLoading() {
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.id = "logout-loading-overlay";
-    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.95);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;";
+    overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:${cssVar("--overlay-bg", "rgba(255,255,255,0.95)")};z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;`;
     const title = document.createElement("div");
     title.textContent = "正在退出登录";
-    title.style.cssText = "font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;";
+    title.style.cssText = `font-size:22px;font-weight:700;color:${cssVar("--accent", "#1d63bf")};margin-bottom:12px;`;
     const hint = document.createElement("div");
     hint.textContent = "正在清除百度账户会话，请勿关闭窗口。";
-    hint.style.cssText = "font-size:14px;color:#718096;margin-bottom:24px;";
+    hint.style.cssText = `font-size:14px;color:${cssVar("--ink-3", "#718096")};margin-bottom:24px;`;
     const spinner = document.createElement("div");
-    spinner.style.cssText = "width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;";
+    spinner.style.cssText = `width:36px;height:36px;border:3px solid ${cssVar("--line", "#e0e8f5")};border-top-color:${cssVar("--accent", "#2577d9")};border-radius:50%;animation:yike-spin 0.8s linear infinite;`;
     const style = document.createElement("style");
     style.textContent = "@keyframes yike-spin{to{transform:rotate(360deg)}}";
     overlay.appendChild(style);
@@ -1125,6 +1355,10 @@ async function init() {
     const savedMode = $("mediaViewMode").value;
     $("mediaDetailView").classList.toggle("active", savedMode === "details");
     $("mediaThumbnailView").classList.toggle("active", savedMode === "thumbnails");
+    // 初始化主题（依赖 state.settings，须在设置读取后执行）
+    initTheme();
+    // 恢复侧边栏折叠状态
+    initSidebarToggle();
   } catch (err) { console.error("Init settings failed:", err); }
   setLoadingStage(30, "正在检查账号权限…");
   await startLogin();

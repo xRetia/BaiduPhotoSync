@@ -23,6 +23,37 @@ const COMPARE_MODES = [
 // --- Helpers ---
 const $ = (id) => document.getElementById(id);
 
+// 应用主题到设置窗口（读取保存的 theme_pref）
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+async function initTheme() {
+  try {
+    const settings = await bridge("get_settings");
+    const pref = settings.theme_pref || "auto";
+    let theme = pref;
+    if (pref === "auto") {
+      theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    applyTheme(theme);
+    // 系统主题变化时自动跟随
+    if (window.matchMedia) {
+      const mq = window.matchMedia("(prefers-color-scheme: light)");
+      const onChange = () => {
+        if (pref === "auto") {
+          applyTheme(mq.matches ? "light" : "dark");
+        }
+      };
+      if (mq.addEventListener) mq.addEventListener("change", onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+    }
+  } catch (err) {
+    // 读取失败时保持默认（暗色）
+    console.error("Init theme failed:", err);
+  }
+}
+
 async function bridge(method, params = {}) {
   return await window.api.call(method, params);
 }
@@ -218,6 +249,7 @@ $("btnCancel").addEventListener("click", () => window.close());
 // --- Init ---
 (async function init() {
   await loadSettings();
+  await initTheme();
   await refreshCacheUsage();
   // If compress is already enabled, check FFmpeg on load
   if ($("compress_oversize_videos").checked) {
