@@ -451,9 +451,10 @@ function createQRLoginWindow() {
       const hasRequired = REQUIRED_COOKIES.every((n) => cookieMap[n]);
       if (!hasRequired) return;
 
-      // 记录 BDUSS 首次出现时间
+      // 记录 BDUSS 首次出现时间，并立即盖住页面
       if (cookieMap["BDUSS"] && bdussSeenAt === 0) {
         bdussSeenAt = Date.now();
+        showQROverlay();
       }
 
       const hasConfirmed = CONFIRMED_COOKIES.some((n) => cookieMap[n]);
@@ -535,6 +536,7 @@ function createQRLoginWindow() {
           if (!hasRequired) return;
           if (cookieMap["BDUSS"] && bdussSeenAt === 0) {
             bdussSeenAt = Date.now();
+            showQROverlay();
           }
           const hasConfirmed = CONFIRMED_COOKIES.some((n) => cookieMap[n]);
           const now = Date.now();
