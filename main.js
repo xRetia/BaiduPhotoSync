@@ -379,21 +379,8 @@ function createQRLoginWindow() {
     .main { background: #f5f7fa !important; height: 100% !important; }
     .login-pop { position: fixed !important; top: 50% !important; left: 50% !important; right: auto !important; transform: translate(-50%, -50%) !important; }
   `;
-  qrWindow.webContents.on("dom-ready", () => {
-    qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
-  });
 
-  const ses = qrWindow.webContents.session;
-  const REQUIRED_COOKIES = ["BAIDUID", "BDUSS"];
-  const CONFIRMED_COOKIES = ["STOKEN", "PTOKEN", "PANWEB", "PANWEB.sig"];
-
-  let bdussSeenAt = 0;        // BDUSS 首次出现的时间戳
-  let candidateTimer = null;  // 延迟提交定时器
-  let submitted = false;       // 是否已提交候选 cookie
-  let cookieCheckTimer = null; // cookie 轮询定时器
-
-  // 在 QR 窗口中注入 loading 遮罩 DOM（参照 Python 版 _create_loading_overlay）
-  // 遮罩初始隐藏，只在提交候选 cookie 验证时显示（参照 Python _set_loading(True)）
+  // 遮罩 JS：创建白底 loading 遮罩（参照 Python _create_loading_overlay）
   const OVERLAY_JS = `
     (function() {
       if (document.getElementById('yike-login-overlay')) return;
@@ -417,14 +404,37 @@ function createQRLoginWindow() {
       document.body.appendChild(overlay);
     })();
   `;
+
+  // 每次页面 dom-ready 时都注入 CSS + 遮罩 DOM（页面跳转后 DOM 重建需重新注入）
   qrWindow.webContents.on("dom-ready", () => {
+    qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
     qrWindow.webContents.executeJavaScript(OVERLAY_JS).catch(() => {});
+    if (submitted) showQROverlay();
   });
+
+  const ses = qrWindow.webContents.session;
+  const REQUIRED_COOKIES = ["BAIDUID", "BDUSS"];
+  const CONFIRMED_COOKIES = ["STOKEN", "PTOKEN", "PANWEB", "PANWEB.sig"];
+
+  let bdussSeenAt = 0;        // BDUSS 首次出现的时间戳
+  let candidateTimer = null;  // 延迟提交定时器
+  let submitted = false;       // 是否已提交候选 cookie
+  let cookieCheckTimer = null; // cookie 轮询定时器
+
+  // 遮罩 JS 和 dom-ready 注入已移到上面统一处理
 
   function showQROverlay() {
     if (qrWindow && !qrWindow.isDestroyed()) {
       qrWindow.webContents.executeJavaScript(
-        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='flex';}"
+        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='flex';}else{" +
+        "var n=document.createElement('div');n.id='yike-login-overlay';" +
+        "n.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;';" +
+        "var t=document.createElement('div');t.textContent='正在登录，请稍候';t.style.cssText='font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';" +
+        "var h=document.createElement('div');h.textContent='正在验证一刻相册访问权限，请勿关闭窗口。';h.style.cssText='font-size:14px;color:#718096;margin-bottom:24px;';" +
+        "var s=document.createElement('div');s.style.cssText='width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';" +
+        "var st=document.createElement('style');st.textContent='@keyframes yike-spin{to{transform:rotate(360deg)}}';" +
+        "n.appendChild(st);n.appendChild(t);n.appendChild(h);n.appendChild(s);document.body.appendChild(n);}" +
+        "}"
       ).catch(() => {});
     }
   }
