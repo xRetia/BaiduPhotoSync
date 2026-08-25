@@ -376,8 +376,22 @@ function createQRLoginWindow() {
   // 注入 CSS：隐藏百度页面多余内容，只显示登录弹窗
   const LOGIN_HIDE_CSS = `
     .header, .flastupload-guide, .box, .features, .box-mark1, .box-mark2, .box-desc1, .box-desc2 { display: none !important; }
-    .main { background: #f5f7fa !important; height: 100% !important; }
-    .login-pop { position: fixed !important; top: 50% !important; left: 50% !important; right: auto !important; transform: translate(-50%, -50%) !important; }
+    .main { background: #ffffff !important; height: 100% !important; padding: 0 !important; margin: 0 !important; }
+    .login-pop {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      transform: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
   `;
 
   // 遮罩 JS：创建白底 loading 遮罩（参照 Python _create_loading_overlay）
