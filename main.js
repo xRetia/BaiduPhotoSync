@@ -802,6 +802,8 @@ function createLogoutWindow(cookieJson) {
     });
 
     async function startLogout() {
+      // 先清除 logout partition 的残留存储，避免上次 cookie 干扰
+      await ses.clearStorageData().catch(() => {});
       // 注入当前 cookie
       try {
         const cookies = JSON.parse(cookieJson);
@@ -1402,10 +1404,10 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
 });
 
 ipcMain.handle("qr-login:open", async () => {
-  // 清除 qr-login partition 的 cookie，确保新 QR 窗口是干净的
+  // 清除 qr-login partition 的所有存储，确保新 QR 窗口是干净的
   // 只影响 qr-login 独立 partition，不影响主应用的 cookie
-  const qrSes = session.fromPartition("partition:qr-login");
-  await qrSes.clearStorageData({ storages: ["cookies"] }).catch(() => {});
+  const qrSes = session.fromPartition("qr-login");
+  await qrSes.clearStorageData().catch(() => {});
   createQRLoginWindow();
 });
 
