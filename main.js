@@ -1402,6 +1402,10 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
 });
 
 ipcMain.handle("qr-login:open", async () => {
+  // 清除 qr-login partition 的 cookie，确保新 QR 窗口是干净的
+  // 只影响 qr-login 独立 partition，不影响主应用的 cookie
+  const qrSes = session.fromPartition("partition:qr-login");
+  await qrSes.clearStorageData({ storages: ["cookies"] }).catch(() => {});
   createQRLoginWindow();
 });
 
