@@ -349,7 +349,7 @@ function createQRLoginWindow() {
   }
 
   qrWindow = new BrowserWindow({
-    width: 360,
+    width: 370,
     height: 520,
     resizable: false,
     minimizable: false,
