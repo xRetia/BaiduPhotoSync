@@ -394,36 +394,70 @@ function createQRLoginWindow() {
     }
   `;
 
-  // 遮罩 JS：创建白底 loading 遮罩（参照 Python _create_loading_overlay）
-  const OVERLAY_JS = `
-    (function() {
-      if (document.getElementById('yike-login-overlay')) return;
-      var overlay = document.createElement('div');
-      overlay.id = 'yike-login-overlay';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:999999;display:none;align-items:center;justify-content:center;flex-direction:column;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
-      var title = document.createElement('div');
-      title.textContent = '正在登录，请稍候';
-      title.style.cssText = 'font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';
-      var hint = document.createElement('div');
-      hint.textContent = '正在验证一刻相册访问权限，请勿关闭窗口。';
-      hint.style.cssText = 'font-size:14px;color:#718096;margin-bottom:24px;';
-      var spinner = document.createElement('div');
-      spinner.style.cssText = 'width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';
-      var style = document.createElement('style');
-      style.textContent = '@keyframes yike-spin{to{transform:rotate(360deg)}}';
-      overlay.appendChild(style);
-      overlay.appendChild(title);
-      overlay.appendChild(hint);
-      overlay.appendChild(spinner);
-      document.body.appendChild(overlay);
-    })();
-  `;
+  // 独立 loading 窗口：盖在 qrWindow 上面，页面跳转不影响遮罩
+  const loadingHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#fff;font-family:"Microsoft YaHei","Segoe UI",sans-serif}
+    .title{font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px}
+    .hint{font-size:14px;color:#718096;margin-bottom:24px}
+    .spinner{width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style></head><body>
+    <div class="title">正在登录，请稍候</div>
+    <div class="hint">正在验证一刻相册访问权限，请勿关闭窗口。</div>
+    <div class="spinner"></div>
+  </body></html>`;
 
-  // 每次页面 dom-ready 时都注入 CSS + 遮罩 DOM（页面跳转后 DOM 重建需重新注入）
+  let loadingWindow = null;
+
+  function showLoading() {
+    if (loadingWindow && !loadingWindow.isDestroyed()) {
+      loadingWindow.show();
+      return;
+    }
+    const [x, y] = qrWindow.getPosition();
+    const [w, h] = qrWindow.getSize();
+    loadingWindow = new BrowserWindow({
+      x, y, width: w, height: h,
+      frame: false,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      parent: qrWindow,
+      focusable: false,
+      skipTaskbar: true,
+      show: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false },
+    });
+    loadingWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(loadingHTML));
+    loadingWindow.on("closed", () => { loadingWindow = null; });
+  }
+
+  function hideLoading() {
+    if (loadingWindow && !loadingWindow.isDestroyed()) {
+      loadingWindow.hide();
+    }
+  }
+
+  // qrWindow 移动/缩放时同步 loading 窗口
+  qrWindow.on("move", () => {
+    if (loadingWindow && !loadingWindow.isDestroyed()) {
+      const [x, y] = qrWindow.getPosition();
+      const [w, h] = qrWindow.getSize();
+      loadingWindow.setBounds({ x, y, width: w, height: h });
+    }
+  });
+  qrWindow.on("resize", () => {
+    if (loadingWindow && !loadingWindow.isDestroyed()) {
+      const [x, y] = qrWindow.getPosition();
+      const [w, h] = qrWindow.getSize();
+      loadingWindow.setBounds({ x, y, width: w, height: h });
+    }
+  });
+
+  // 每次页面 dom-ready 时都注入 CSS（页面跳转后 DOM 重建需重新注入）
   qrWindow.webContents.on("dom-ready", () => {
     qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
-    qrWindow.webContents.executeJavaScript(OVERLAY_JS).catch(() => {});
-    if (submitted) showQROverlay();
   });
 
   const ses = qrWindow.webContents.session;
@@ -434,32 +468,6 @@ function createQRLoginWindow() {
   let candidateTimer = null;  // 延迟提交定时器
   let submitted = false;       // 是否已提交候选 cookie
   let cookieCheckTimer = null; // cookie 轮询定时器
-
-  // 遮罩 JS 和 dom-ready 注入已移到上面统一处理
-
-  function showQROverlay() {
-    if (qrWindow && !qrWindow.isDestroyed()) {
-      qrWindow.webContents.executeJavaScript(
-        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='flex';}else{" +
-        "var n=document.createElement('div');n.id='yike-login-overlay';" +
-        "n.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;';" +
-        "var t=document.createElement('div');t.textContent='正在登录，请稍候';t.style.cssText='font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';" +
-        "var h=document.createElement('div');h.textContent='正在验证一刻相册访问权限，请勿关闭窗口。';h.style.cssText='font-size:14px;color:#718096;margin-bottom:24px;';" +
-        "var s=document.createElement('div');s.style.cssText='width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';" +
-        "var st=document.createElement('style');st.textContent='@keyframes yike-spin{to{transform:rotate(360deg)}}';" +
-        "n.appendChild(st);n.appendChild(t);n.appendChild(h);n.appendChild(s);document.body.appendChild(n);}" +
-        "}"
-      ).catch(() => {});
-    }
-  }
-
-  function hideQROverlay() {
-    if (qrWindow && !qrWindow.isDestroyed()) {
-      qrWindow.webContents.executeJavaScript(
-        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='none';}"
-      ).catch(() => {});
-    }
-  }
 
   cookieCheckTimer = setInterval(() => {
     if (!qrWindow || qrWindow.isDestroyed()) {
@@ -509,8 +517,8 @@ function createQRLoginWindow() {
     submitted = true;
     clearInterval(cookieCheckTimer);
     cookieCheckTimer = null;
-    // 显示 loading 遮罩
-    showQROverlay();
+    // 显示 loading 窗口盖住整个 webview
+    showLoading();
 
     ses.cookies.get({}).then((cookies) => {
       const cookieJson = JSON.stringify(
@@ -541,8 +549,8 @@ function createQRLoginWindow() {
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
     submitted = false;
     bdussSeenAt = 0;
-    // 隐藏遮罩，让用户可以重新扫码
-    hideQROverlay();
+    // 隐藏 loading 窗口，让用户可以重新扫码
+    hideLoading();
     if (!cookieCheckTimer && qrWindow && !qrWindow.isDestroyed()) {
       cookieCheckTimer = setInterval(() => {
         if (!qrWindow || qrWindow.isDestroyed()) {
@@ -582,6 +590,8 @@ function createQRLoginWindow() {
   qrWindow.on("closed", () => {
     if (cookieCheckTimer) { clearInterval(cookieCheckTimer); cookieCheckTimer = null; }
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
+    if (loadingWindow && !loadingWindow.isDestroyed()) { loadingWindow.destroy(); }
+    loadingWindow = null;
     qrWindow = null;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("qr-login-closed");
