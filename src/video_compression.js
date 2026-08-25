@@ -92,7 +92,7 @@ function _findTool(name) {
   // 系统 PATH
   try {
     const which = process.platform === "win32"
-      ? execSync(`where ${executable}`, { encoding: "utf-8" }).trim().split("\n")[0]
+      ? execSync(`where ${executable} 2>nul`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim().split("\n")[0]
       : execSync(`which ${name}`, { encoding: "utf-8" }).trim();
     if (which) return which;
   } catch {}

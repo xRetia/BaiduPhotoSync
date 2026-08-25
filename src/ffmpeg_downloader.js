@@ -20,7 +20,7 @@ const { exec } = require("child_process");
 const { app_data_directory } = require("./platform_services");
 
 const RELEASE_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download";
-const MIRROR_PREFIX = "https://ghproxy.net/";
+const MIRROR_PREFIX = "https://gh-proxy.com/";
 const ARCHIVE_NAME = "ffmpeg-master-latest-win64-gpl.zip";
 const CHECKSUM_NAME = "checksums.sha256";
 const CHUNK_SIZE = 512 * 1024;
@@ -46,7 +46,7 @@ function download_directory() {
 async function _readChecksum(source = SOURCES.OFFICIAL) {
   const url = `${_baseUrl(source)}/${CHECKSUM_NAME}`;
   try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
     const content = await resp.text();
     for (const line of content.split("\n")) {
       const parts = line.trim().split(/\s+/);
@@ -76,8 +76,16 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL)
   const url = `${_baseUrl(source)}/${ARCHIVE_NAME}`;
   const sourceLabel = source === SOURCES.MIRROR ? "国内镜像" : "官方";
   const tempPath = targetPath + ".part";
+
+  // 停滞超时：连接阶段允许 90 秒等待响应；下载阶段只要持续有数据流入就不超时，
+  // 仅当连续 60 秒无任何数据时才中止，避免慢速但正常的大文件下载被误杀。
+  const CONNECT_TIMEOUT = 90000;
+  const STALL_TIMEOUT = 60000;
+  const controller = new AbortController();
+  let stallTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT);
+
   try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const resp = await fetch(url, { signal: controller.signal });
     const total = parseInt(resp.headers.get("content-length") || "0", 10);
     const writer = fs.createWriteStream(tempPath);
     const reader = resp.body.getReader();
@@ -85,9 +93,17 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL)
     let downloaded = 0;
     const started = performance.now();
 
+    // 收到首个响应后切换为停滞超时
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT);
+
     while (true) {
       const { done, value } = await reader.read();
+      // 每收到一帧数据就重置停滞计时器
+      clearTimeout(stallTimer);
       if (done) break;
+      stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT);
+
       writer.write(value);
       hash.update(value);
       downloaded += value.length;
@@ -106,6 +122,7 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL)
     fs.renameSync(tempPath, targetPath);
     return hash.digest("hex").toLowerCase();
   } catch (err) {
+    clearTimeout(stallTimer);
     try { fs.unlinkSync(tempPath); } catch {}
     throw new FFmpegDownloadError(`“极光引擎”（${sourceLabel}源）下载失败：${err.name}`);
   }
