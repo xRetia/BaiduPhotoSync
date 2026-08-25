@@ -605,7 +605,7 @@ const LOGOUT_INJECT_JS = `
       page.id = 'yike-logout-page';
       page.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#f5f7fa;font-family:"Microsoft YaHei","Segoe UI",sans-serif;z-index:999999;';
       var card = document.createElement('div');
-      card.style.cssText = 'background:#fff;border-radius:12px;padding:40px 48px;box-shadow:0 2px 16px rgba(0,0,0,0.08);text-align:center;';
+      card.style.cssText = 'text-align:center;';
       var icon = document.createElement('div');
       icon.style.cssText = 'width:48px;height:48px;margin:0 auto 16px;border-radius:50%;background:#fee;display:flex;align-items:center;justify-content:center;font-size:24px;color:#e53e3e;';
       icon.textContent = '\\u21A2';
@@ -697,8 +697,11 @@ function createLogoutWindow(cookieJson) {
       height: 350,
       show: false,
       autoHideMenuBar: true,
-      title: "退出",
+      title: "注销",
       icon: path.join(__dirname, "assets", "yike_sync.ico"),
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
       webPreferences: {
         partition: "logout",
         contextIsolation: true,
@@ -1389,9 +1392,6 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
 });
 
 ipcMain.handle("qr-login:open", async () => {
-  // 清除 qr-login partition 的 cookie，确保新 QR 窗口是干净的（防止登出后旧 cookie 残留）
-  const qrSes = session.fromPartition("partition:qr-login");
-  await qrSes.clearStorageData({ storages: ["cookies"] }).catch(() => {});
   createQRLoginWindow();
 });
 
@@ -1402,8 +1402,11 @@ ipcMain.handle("logout:start", async () => {
   // 用 client 内部最新 cookie，而非全局 cookieText（对齐 Python export_cookie_json）
   const currentCookieJson = client.exportCookieJson();
   if (!currentCookieJson) return { success: false, reason: "no_session" };
-  stopKeepalive();
+  // 不提前 stopKeepalive，等用户确认登出成功后才停止
   const result = await createLogoutWindow(currentCookieJson);
+  if (result.success) {
+    stopKeepalive();
+  }
   return result;
 });
 
