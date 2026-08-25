@@ -956,6 +956,7 @@ function createSettingsWindow() {
     minHeight: 480,
     resizable: true,
     minimizable: false,
+    maximizable: false,
     title: "高级同步设置",
     icon: path.join(__dirname, "assets", "yike_sync.ico"),
     parent: mainWindow,
