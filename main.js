@@ -348,11 +348,12 @@ function createQRLoginWindow() {
   }
 
   qrWindow = new BrowserWindow({
-    width: 1024,
-    height: 700,
-    resizable: true,
+    width: 460,
+    height: 580,
+    resizable: false,
     minimizable: false,
-    title: "扫码登录 - 一刻相册",
+    maximizable: false,
+    title: "登录一刻同步助手",
     icon: path.join(__dirname, "assets", "yike_sync.ico"),
     parent: mainWindow,
     modal: true,
@@ -367,6 +368,16 @@ function createQRLoginWindow() {
 
   const loginUrl = "https://photo.baidu.com/photo/web/login";
   qrWindow.loadURL(loginUrl);
+
+  // 注入 CSS：隐藏百度页面多余内容，只显示登录弹窗
+  const LOGIN_HIDE_CSS = `
+    .header, .flastupload-guide, .box, .features, .box-mark1, .box-mark2, .box-desc1, .box-desc2 { display: none !important; }
+    .main { background: #f5f7fa !important; }
+    .login-pop { position: fixed !important; top: 50% !important; left: 50% !important; right: auto !important; transform: translate(-50%, -50%) !important; }
+  `;
+  qrWindow.webContents.on("dom-ready", () => {
+    qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
+  });
 
   const ses = qrWindow.webContents.session;
   const REQUIRED_COOKIES = ["BAIDUID", "BDUSS"];
