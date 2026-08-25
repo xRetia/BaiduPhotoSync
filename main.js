@@ -193,14 +193,13 @@ function refreshKeepaliveCookie(ses) {
     if (cookieJson !== cookieText) {
       cookieText = cookieJson;
       sessionStore.save(cookieJson);
-      // 用刷新后的 cookie 重建活跃 client，确保后续 API 调用使用最新会话
+      // 用刷新后的 cookie 更新活跃 client（原地更新，保留相册/媒体缓存）
       if (client) {
         try {
-          const newClient = new YikeRemoteClient(cookieJson);
-          client = newClient;
-          console.debug("会话保活检测到 Cookie 更新，已重建活跃 client 实例");
+          client.updateCookie(cookieJson);
+          console.debug("会话保活检测到 Cookie 更新，已原地更新活跃 client 实例");
         } catch (err) {
-          console.warn("会话保活 cookie 刷新后重建 client 失败:", err.message || err);
+          console.warn("会话保活 cookie 刷新后更新 client 失败:", err.message || err);
         }
       } else {
         console.debug("会话保活检测到 Cookie 更新，已保存刷新后的会话");
@@ -455,13 +454,24 @@ function createQRLoginWindow() {
   });
   qrWindow.webContents.on("did-navigate", (_e, url) => {
     console.debug(`登录：页面已跳转 → ${url}`);
-    if (!url.includes("/login")) onLoginNavigated();
+    if (!url.includes("/login")) {
+      onLoginNavigated();
+      // 到达登录后的主页（非 /login）即视为登录完成，稍后提交完整 cookie
+      if (url.includes("photo.baidu.com/photo/web/")) {
+        reachedHome = true;
+        scheduleCandidate();
+      }
+    }
   });
   qrWindow.webContents.on("did-navigate-in-page", (_e, url) => {
     // SPA 内部跳转也可能是登录成功后的路由变化
     if (url.includes("photo.baidu.com/photo/web/") && !url.includes("/login")) {
       console.debug(`登录：SPA 内部跳转 → ${url}`);
       onLoginNavigated();
+      // 登录成功跳转到主页后才提交，确保 Baidu 已下发完整会话 Cookie（避免拿到
+      // 扫码时的临时 BDUSS 导致后续 API 返回 errno -6）
+      reachedHome = true;
+      scheduleCandidate();
     }
   });
 
@@ -470,9 +480,18 @@ function createQRLoginWindow() {
   const CONFIRMED_COOKIES = ["STOKEN", "PTOKEN", "PANWEB", "PANWEB.sig"];
 
   let bdussSeenAt = 0;        // BDUSS 首次出现的时间戳
+  let reachedHome = false;     // 是否已跳转到登录后的主页（完整会话已下发）
   let candidateTimer = null;  // 延迟提交定时器
   let submitted = false;       // 是否已提交候选 cookie
   let cookieCheckTimer = null; // cookie 轮询定时器
+
+  // 安排一次延迟提交（1200ms，等 cookie 完全传播）。幂等：已安排或已提交则跳过。
+  function scheduleCandidate() {
+    if (submitted || candidateTimer) return;
+    candidateTimer = setTimeout(() => {
+      submitCandidateCookie();
+    }, 1200);
+  }
 
   cookieCheckTimer = setInterval(() => {
     if (!qrWindow || qrWindow.isDestroyed()) {
@@ -495,33 +514,22 @@ function createQRLoginWindow() {
         bdussSeenAt = Date.now();
       }
 
-      const hasConfirmed = CONFIRMED_COOKIES.some((n) => cookieMap[n]);
       const now = Date.now();
       const bdussAge = bdussSeenAt ? (now - bdussSeenAt) / 1000 : 0;
 
-      if (hasConfirmed) {
-        // 确认态 cookie 出现，延迟 1200ms 提交（等 cookie 完全传播）
-        if (!candidateTimer) {
-          candidateTimer = setTimeout(() => {
-            submitCandidateCookie();
-          }, 1200);
-        }
-      } else if (bdussSeenAt && bdussAge > 10) {
-        // BDUSS 出现超过 10 秒，安全网：即使没有确认态 cookie 也提交
-        if (!candidateTimer) {
-          candidateTimer = setTimeout(() => {
-            submitCandidateCookie();
-          }, 1200);
-        }
+      if (reachedHome) {
+        // 已到达登录后主页：Baidu 已下发完整会话 Cookie，直接提交
+        scheduleCandidate();
+      } else if (bdussSeenAt && bdussAge > 15) {
+        // 安全网：长时间未跳转到主页（部分账号/网络），BDUSS 出现超过 15 秒后
+        // 即便没有确认态 Cookie 也提交，避免卡死
+        scheduleCandidate();
       }
     });
   }, 1000);
 
   function submitCandidateCookie() {
     if (submitted || !qrWindow || qrWindow.isDestroyed()) return;
-    submitted = true;
-    clearInterval(cookieCheckTimer);
-    cookieCheckTimer = null;
 
     // 确保已隐藏 qrWindow 并显示 loading
     onLoginNavigated();
@@ -533,21 +541,26 @@ function createQRLoginWindow() {
           .filter((c) => c.domain && c.domain.includes("baidu.com"))
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain }))
       );
-      // 防御：必要时核心 Cookie 缺失则放弃本次提交并允许重试，
+      // 防御：核心 Cookie 缺失则放弃本次提交并允许重试，
       // 避免把不完整的 Cookie 发给渲染进程反复验证失败（“获取不到 cookie”）。
       let parsed = [];
       try { parsed = JSON.parse(cookieJson); } catch { parsed = []; }
       const names = new Set(parsed.map((c) => c.name));
       if (!REQUIRED_COOKIES.every((n) => names.has(n))) {
         submitted = false;
+        candidateTimer = null;
         return;
       }
+      submitted = true;
+      clearInterval(cookieCheckTimer);
+      cookieCheckTimer = null;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("qr-login-cookie", cookieJson);
       }
       // 不关闭 qrWindow，等渲染进程验证成功后再关闭
     }).catch(() => {
       submitted = false; // 允许重试
+      candidateTimer = null;
     });
   }
 
@@ -1092,17 +1105,32 @@ async function handleMethod(method, params, sender) {
     const maxRetries = 8;
     let lastErr = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // 每次校验都优先使用 QR 登录窗口“活体”会话里的最新 Cookie
+      // （对齐 Python：_start_qr_login_validation 每次都从 webview 重新读取 cookie_text，
+      // 避免拿到扫码瞬间下发的临时 BDUSS / 不完整的 Cookie 导致 errno -6 后死循环）。
+      // 仅当 QR 窗口已关闭时才退回使用最初传入的快照。
+      let useCookie = ct;
+      if (qrWindow && !qrWindow.isDestroyed()) {
+        try {
+          const live = await qrWindow.webContents.session.cookies.get({});
+          const baiduCookies = live
+            .filter((c) => c.domain && c.domain.includes("baidu.com"))
+            .map((c) => ({ name: c.name, value: c.value, domain: c.domain }));
+          const hasRequired = baiduCookies.some((c) => c.name === "BAIDUID") && baiduCookies.some((c) => c.name === "BDUSS");
+          if (hasRequired) useCookie = JSON.stringify(baiduCookies);
+        } catch { /* 读取失败则继续使用原始快照 */ }
+      }
       try {
-        const newClient = new YikeRemoteClient(ct);
+        const newClient = new YikeRemoteClient(useCookie);
         await newClient.verifyLogin();
         client = newClient;
-        cookieText = ct;
+        cookieText = useCookie;
         if (params.save) {
-          sessionStore.save(ct);
+          sessionStore.save(useCookie);
         }
         // 启动会话保活：创建隐藏窗口加载百度相册页面
         const enhancedKeepalive = settings.enhanced_keepalive === true || settings.enhanced_keepalive === "true";
-        startKeepalive(ct, enhancedKeepalive);
+        startKeepalive(useCookie, enhancedKeepalive);
         return { connected: true };
       } catch (err) {
         lastErr = err;

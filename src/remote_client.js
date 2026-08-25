@@ -468,6 +468,21 @@ class YikeRemoteClient {
   }
 
   /**
+   * 原地更新 Cookie（保留所有缓存，避免重建实例导致相册/媒体缓存丢失）。
+   * @param {string} newCookieText - 新的 cookie 文本（JSON 数组或 TSV）
+   */
+  updateCookie(newCookieText) {
+    this._cookieText = newCookieText;
+    this._cookies = parseCookieText(newCookieText);
+    // 原地更新 API 层的 cookie 引用，不创建新 API 实例
+    this._api.req.cookies = this._cookies;
+    this._api.req.bdstoken = null; // bdstoken 需要用新 cookie 重新获取
+    console.debug(
+      `已原地更新客户端 Cookie；已解析 ${Object.keys(this._cookies).length} 个 Cookie 字段`
+    );
+  }
+
+  /**
    * 导出 cookie 为 JSON 数组（WebEngine seed 格式）。
    * 仅用于临时登出 webview，不应写入文件。
    */
