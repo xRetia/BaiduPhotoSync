@@ -588,54 +588,86 @@ const LOGOUT_HOME_URL = "https://photo.baidu.com/photo/web/home";
 const LOGOUT_COOKIE_URL = "https://photo.baidu.com/";
 const LOGOUT_TIMEOUT_MS = 30 * 1000; // 30 秒超时
 
-// JS：在百度相册页面中找到并点击"退出登录"按钮
-const LOGOUT_CLICK_JS = `
+// CSS：隐藏百度相册页面所有内容，只显示自定义退出按钮
+const LOGOUT_HIDE_CSS = `
+  #app { display: none !important; }
+  body { background: #f5f7fa !important; margin: 0 !important; padding: 0 !important; }
+`;
+
+// JS：注入自定义退出登录页面，点击后触发百度退出流程
+const LOGOUT_INJECT_JS = `
   (function() {
-    // 在 .yk-header__popup--bottom 中查找"退出登录"列表项
-    function findLogoutItem() {
-      var containers = document.querySelectorAll('.yk-header__popup--bottom');
-      for (var i = 0; i < containers.length; i++) {
-        var items = containers[i].querySelectorAll('.list-item');
-        for (var j = 0; j < items.length; j++) {
-          if (items[j].textContent.trim() === '退出登录') return items[j];
+    if (document.getElementById('yike-logout-page')) return;
+    var page = document.createElement('div');
+    page.id = 'yike-logout-page';
+    page.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#f5f7fa;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
+    var card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border-radius:12px;padding:40px 48px;box-shadow:0 2px 16px rgba(0,0,0,0.08);text-align:center;';
+    var icon = document.createElement('div');
+    icon.style.cssText = 'width:48px;height:48px;margin:0 auto 16px;border-radius:50%;background:#fee;border-color:#f56565;display:flex;align-items:center;justify-content:center;font-size:24px;color:#e53e3e;';
+    icon.textContent = '\u21A2';
+    var title = document.createElement('div');
+    title.textContent = '退出百度账户';
+    title.style.cssText = 'font-size:18px;font-weight:700;color:#2d3748;margin-bottom:8px;';
+    var hint = document.createElement('div');
+    hint.textContent = '点击下方按钮退出当前登录的百度账户，退出后需重新扫码登录。';
+    hint.style.cssText = 'font-size:13px;color:#718096;margin-bottom:24px;line-height:1.6;max-width:280px;';
+    var btn = document.createElement('button');
+    btn.textContent = '退出登录';
+    btn.style.cssText = 'background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:10px 32px;font-size:15px;font-weight:600;cursor:pointer;transition:background 0.2s;';
+    btn.onmouseover = function() { btn.style.background = '#c53030;'; };
+    btn.onmouseout = function() { btn.style.background = '#e53e3e'; };
+    btn.onclick = function() {
+      btn.disabled = true;
+      btn.textContent = '正在退出...';
+      btn.style.background = '#a0aec0';
+      // 触发百度退出流程：查找并点击退出登录按钮
+      function findLogoutItem() {
+        var containers = document.querySelectorAll('.yk-header__popup--bottom');
+        for (var i = 0; i < containers.length; i++) {
+          var items = containers[i].querySelectorAll('.list-item');
+          for (var j = 0; j < items.length; j++) {
+            if (items[j].textContent.trim() === '退出登录') return items[j];
+          }
         }
+        var allItems = document.querySelectorAll('.list-item');
+        for (var i = 0; i < allItems.length; i++) {
+          if (allItems[i].textContent.trim() === '退出登录') return allItems[i];
+        }
+        return null;
       }
-      // 后备：搜索页面上所有 list-item
-      var allItems = document.querySelectorAll('.list-item');
-      for (var i = 0; i < allItems.length; i++) {
-        if (allItems[i].textContent.trim() === '退出登录') return allItems[i];
+      function tryTriggerLogout() {
+        var logoutItem = findLogoutItem();
+        if (logoutItem) {
+          var popover = logoutItem.closest('.yk-popover');
+          if (popover) popover.style.setProperty('display', 'block', 'important');
+          logoutItem.click();
+          return true;
+        }
+        // 尝试点击头像展开 popover
+        var selectors = ['.yk-header .user-info', '.yk-header [class*="avatar"]', '.yk-header [class*="user"]', '.yk-header__right', 'header [class*="user"]', 'header [class*="avatar"]'];
+        for (var i = 0; i < selectors.length; i++) {
+          var el = document.querySelector(selectors[i]);
+          if (el) { el.click(); return false; }
+        }
+        return false;
       }
-      return null;
-    }
-    // 查找触发 popover 的头像/用户区域
-    function findAvatarTrigger() {
-      var selectors = [
-        '.yk-header .user-info',
-        '.yk-header [class*="avatar"]',
-        '.yk-header [class*="user"]',
-        '.yk-header__right',
-        'header [class*="user"]',
-        'header [class*="avatar"]',
-      ];
-      for (var i = 0; i < selectors.length; i++) {
-        var el = document.querySelector(selectors[i]);
-        if (el) return el;
+      // 重试机制：popover 可能需要先展开
+      var attempts = 0;
+      function retry() {
+        attempts++;
+        if (attempts > 10) return;
+        var ok = tryTriggerLogout();
+        if (!ok) { setTimeout(retry, 800); }
       }
-      return null;
-    }
-    // 1. 尝试直接点击"退出登录"（Vue 事件监听器不依赖 CSS 可见性）
-    var logoutItem = findLogoutItem();
-    if (logoutItem) {
-      // 强制 popover 可见，以防 Vue 检查可见性
-      var popover = logoutItem.closest('.yk-popover');
-      if (popover) popover.style.setProperty('display', 'block', 'important');
-      logoutItem.click();
-      return 'clicked_logout';
-    }
-    // 2. 尝试点击头像展开 popover，下次重试时再点击退出
-    var avatar = findAvatarTrigger();
-    if (avatar) { avatar.click(); return 'avatar_clicked'; }
-    return 'not_found';
+      retry();
+    };
+    card.appendChild(icon);
+    card.appendChild(title);
+    card.appendChild(hint);
+    card.appendChild(btn);
+    page.appendChild(card);
+    document.body.appendChild(page);
   })();
 `;
 
@@ -649,7 +681,7 @@ function createLogoutWindow(cookieJson) {
 
     logoutWindow = new BrowserWindow({
       width: 400,
-      height: 300,
+      height: 350,
       show: false,
       webPreferences: {
         partition: "logout",
@@ -660,15 +692,12 @@ function createLogoutWindow(cookieJson) {
 
     const ses = logoutWindow.webContents.session;
     let logoutTimeoutTimer = null;
-    let clickRetryTimer = null;
     let resolved = false;
-    let clickAttempts = 0;
 
     function finish(result) {
       if (resolved) return;
       resolved = true;
       if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
-      if (clickRetryTimer) { clearTimeout(clickRetryTimer); clickRetryTimer = null; }
       if (logoutWindow && !logoutWindow.isDestroyed()) {
         logoutWindow.destroy();
       }
@@ -701,6 +730,16 @@ function createLogoutWindow(cookieJson) {
       }
     });
 
+    logoutWindow.webContents.on("dom-ready", () => {
+      // 隐藏百度页面所有内容，注入自定义退出页面
+      logoutWindow.webContents.insertCSS(LOGOUT_HIDE_CSS).catch(() => {});
+      logoutWindow.webContents.executeJavaScript(LOGOUT_INJECT_JS).catch(() => {});
+      // 显示窗口
+      if (logoutWindow && !logoutWindow.isDestroyed()) {
+        logoutWindow.show();
+      }
+    });
+
     logoutWindow.webContents.on("did-finish-load", () => {
       const url = logoutWindow.webContents.getURL();
       console.debug(`登出：页面加载完成，当前 URL=${url}`);
@@ -708,38 +747,14 @@ function createLogoutWindow(cookieJson) {
         finish({ success: true });
         return;
       }
-      // 页面加载完成，尝试点击退出登录
-      tryClickLogout();
+      // 页面加载完成后再次注入自定义页面（Vue 渲染可能覆盖）
+      logoutWindow.webContents.insertCSS(LOGOUT_HIDE_CSS).catch(() => {});
+      logoutWindow.webContents.executeJavaScript(LOGOUT_INJECT_JS).catch(() => {});
     });
 
     logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
       console.warn(`登出：页面加载失败 ${errorCode} ${errorDescription}`);
     });
-
-    function tryClickLogout() {
-      if (resolved || !logoutWindow || logoutWindow.isDestroyed()) return;
-      if (clickAttempts >= 15) {
-        console.warn("登出：点击退出按钮尝试已达上限");
-        return;
-      }
-      clickAttempts++;
-      logoutWindow.webContents.executeJavaScript(LOGOUT_CLICK_JS).then((result) => {
-        console.debug(`登出：第 ${clickAttempts} 次尝试 → ${result}`);
-        if (result === "clicked_logout") {
-          // 已点击退出登录，3 秒后若无导航则重试（可能点击未生效）
-          clickRetryTimer = setTimeout(tryClickLogout, 3000);
-        } else if (result === "avatar_clicked") {
-          // 已点击头像展开 popover，800ms 后重试点击退出
-          clickRetryTimer = setTimeout(tryClickLogout, 800);
-        } else {
-          // 未找到任何元素，2 秒后重试（Vue 可能还在渲染）
-          clickRetryTimer = setTimeout(tryClickLogout, 2000);
-        }
-      }).catch((err) => {
-        console.warn(`登出：点击退出按钮出错: ${err.message || err}`);
-        clickRetryTimer = setTimeout(tryClickLogout, 2000);
-      });
-    }
 
     async function startLogout() {
       // 注入当前 cookie

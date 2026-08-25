@@ -897,15 +897,16 @@ $("btnConnect").addEventListener("click", () => {
 
 async function logout() {
   if (state.syncMode !== "idle") { toast("请先暂停或停止同步再退出登录。", "warning"); return; }
-  showLogoutLoading();
+  // 不再先显示 loading——让用户看到登出窗口的自定义退出页面
   try {
     const result = await window.api.startLogout();
     if (!result.success) {
-      hideLogoutLoading();
       const msgs = { timeout: "登出超时，未检测到会话失效。", no_bduss: "无法注入登录凭证，登出失败。", no_client: "未找到活跃会话。" };
       toast((result.reason && msgs[result.reason]) || "登出失败，本机登录信息仍保留。", "warning");
       return;
     }
+    // 登出成功，显示 loading 等待清理完成
+    showLogoutLoading();
     await bridge("clear_session");
     await bridge("disconnect");
     state.connected = false;
