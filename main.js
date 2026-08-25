@@ -395,13 +395,14 @@ function createQRLoginWindow() {
   `;
 
   // 独立 loading 窗口：盖在 qrWindow 上面，页面跳转不影响遮罩
+  // 样式对齐退出登录的 showLogoutLoading()
   const loadingHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     *{margin:0;padding:0;box-sizing:border-box}
-    body{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#fff;font-family:"Microsoft YaHei","Segoe UI",sans-serif}
+    body{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;background:rgba(255,255,255,0.95);font-family:"Microsoft YaHei","Segoe UI",sans-serif}
     .title{font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px}
     .hint{font-size:14px;color:#718096;margin-bottom:24px}
-    .spinner{width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:spin .8s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
+    .spinner{width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite}
+    @keyframes yike-spin{to{transform:rotate(360deg)}}
   </style></head><body>
     <div class="title">正在登录，请稍候</div>
     <div class="hint">正在验证一刻相册访问权限，请勿关闭窗口。</div>
@@ -1403,7 +1404,10 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
   }
 });
 
-ipcMain.handle("qr-login:open", () => {
+ipcMain.handle("qr-login:open", async () => {
+  // 清除 qr-login partition 的 cookie，确保新 QR 窗口是干净的（防止登出后旧 cookie 残留）
+  const qrSes = session.fromPartition("partition:qr-login");
+  await qrSes.clearStorageData({ storages: ["cookies"] }).catch(() => {});
   createQRLoginWindow();
 });
 
