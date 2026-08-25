@@ -86,19 +86,17 @@
             <label class="form-label">相册读取并发</label>
             <input type="number" id="list_threads" class="form-input" min="1" max="16" value="8" title="生成计划时并行读取云端相册媒体的线程数（1-16）。默认 8；如遇限流可调小。">
           </div>
-          <div class="form-section">
-            <h3 class="section-title">下载缓存</h3>
-            <div class="form-row">
-              <label class="form-label">缓存上限</label>
-              <input type="number" id="download_cache_mib" class="form-input" min="64" max="102400" step="128" value="1024" title="已下载或已预览的云端文件会保存在当前系统用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。">
-              <span class="form-suffix">MiB</span>
-            </div>
-            <div class="form-row">
-              <span id="cacheUsage" class="form-hint">正在读取缓存占用…</span>
-            </div>
-            <div class="form-row">
-              <button id="btnClearCache" class="btn-secondary">清理下载缓存</button>
-            </div>
+          <h2 class="cache-title">下载缓存</h2>
+          <div class="form-row">
+            <label class="form-label">缓存上限</label>
+            <input type="number" id="download_cache_mib" class="form-input" min="64" max="102400" step="128" value="1024" title="已下载或已预览的云端文件会保存在当前系统用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。">
+            <span class="form-suffix">MiB</span>
+          </div>
+          <div class="form-row">
+            <span id="cacheUsage" class="form-hint">正在读取缓存占用…</span>
+          </div>
+          <div class="form-row">
+            <button id="btnClearCache" class="btn-secondary">清理下载缓存</button>
           </div>
         </div>
       </section>
@@ -109,18 +107,30 @@
         <div class="form-grid">
           <div class="form-row full">
             <label class="form-checkbox">
-              <input type="checkbox" id="compress_oversize_videos">
+              <input type="checkbox" id="compress_oversize_videos" disabled>
               <span>压缩视频到30M以内</span>
             </label>
           </div>
-          <p class="form-note">免费用户单个视频不能超过30M，如果视频上传失败可开启，但会影响视频画质。</p>
-          <div id="ffmpegSection" class="form-section" style="display:none">
-            <h3 class="section-title">FFmpeg 组件</h3>
+          <p class="form-note">免费用户单个视频不能超过30M，如果视频上传失败可开启，但会影响视频画质。<br>此功能依赖极光视频压制引擎，未安装前不可启用。</p>
+          <div id="ffmpegSection" class="form-section">
+            <h3 class="section-title">极光视频压制引擎</h3>
             <div class="form-row">
-              <span id="ffmpegStatus" class="form-hint">正在检测 FFmpeg…</span>
+              <span id="ffmpegStatus" class="form-hint">正在检测极光视频压制引擎…</span>
             </div>
-            <div class="form-row">
-              <button id="btnDownloadFFmpeg" class="btn-secondary" style="display:none">下载 FFmpeg</button>
+            <div class="form-row" id="ffmpegDownloadRow" style="display:none">
+              <select id="ffmpegSource" class="form-select source-select" title="选择下载来源：官方源（GitHub 直连）或国内镜像（ghproxy.net 加速）。国内网络建议选择镜像源。">
+                <option value="official">官方源</option>
+                <option value="mirror">国内镜像</option>
+              </select>
+              <button id="btnDownloadFFmpeg" class="btn-secondary">下载极光视频压制引擎</button>
+            </div>
+            <div class="form-row" id="ffmpegProgressRow" style="display:none">
+              <div class="progress-wrap">
+                <div class="progress-track">
+                  <div id="ffmpegProgressBar" class="progress-bar" style="width:0%"></div>
+                </div>
+                <span id="ffmpegProgressText" class="progress-text">0%</span>
+              </div>
             </div>
           </div>
         </div>

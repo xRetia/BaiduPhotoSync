@@ -174,51 +174,71 @@ $("btnClearCache").addEventListener("click", async () => {
   }
 });
 
-// --- FFmpeg ---
+// --- 极光视频压制引擎 (FFmpeg) ---
+// 引擎可用时启用压缩复选框；不可用时禁用并提示
+function setEngineReady(ready) {
+  $("compress_oversize_videos").disabled = !ready;
+}
+
 async function checkFFmpeg() {
   try {
     const result = await bridge("check_ffmpeg");
     if (result.available) {
-      $("ffmpegStatus").textContent = "FFmpeg 已安装，可直接使用视频压缩功能。";
-      $("ffmpegSection").style.display = "block";
-      $("btnDownloadFFmpeg").style.display = "none";
+      $("ffmpegStatus").textContent = "极光视频压制引擎已就绪，可启用视频压缩。";
+      $("ffmpegDownloadRow").style.display = "none";
+      setEngineReady(true);
     } else {
-      $("ffmpegStatus").textContent = "未检测到 FFmpeg，需要下载后才能压缩视频。";
-      $("ffmpegSection").style.display = "block";
-      $("btnDownloadFFmpeg").style.display = "inline-block";
+      $("ffmpegStatus").textContent = "未检测到极光视频压制引擎。如需要视频压缩，请选择下载来源后点击按钮下载并安装。";
+      $("ffmpegDownloadRow").style.display = "flex";
+      setEngineReady(false);
+      $("compress_oversize_videos").checked = false;
     }
   } catch (err) {
-    $("ffmpegStatus").textContent = "检测 FFmpeg 失败：" + (err.message || err);
-    $("ffmpegSection").style.display = "block";
+    $("ffmpegStatus").textContent = "检测极光视频压制引擎失败：" + (err.message || err);
+    setEngineReady(false);
+    $("compress_oversize_videos").checked = false;
   }
 }
 
-// Show FFmpeg section when compress checkbox is toggled
-$("compress_oversize_videos").addEventListener("change", () => {
-  if ($("compress_oversize_videos").checked) {
-    $("ffmpegSection").style.display = "block";
-    checkFFmpeg();
-  } else {
-    $("ffmpegSection").style.display = "none";
+// 下载进度更新（main.js 通过 bridge:progress 发送）
+window.api.onProgress((value, text) => {
+  if (document.visibilityState === "hidden") return;
+  if (!$("ffmpegProgressRow") || $("ffmpegProgressRow").style.display === "none") return;
+  const pct = Math.max(0, Math.min(100, Math.round(value)));
+  $("ffmpegProgressBar").style.width = pct + "%";
+  // 界面统一使用"极光视频压制引擎"名称，隐藏底层 FFmpeg 术语
+  let label = (text || (pct + "%")).replace(/FFmpeg/g, "极光视频压制引擎");
+  $("ffmpegProgressText").textContent = label;
+  if (pct >= 100) {
+    $("ffmpegProgressText").textContent = "校验完成，正在完成安装…";
   }
 });
 
-// Download FFmpeg
+// Download 极光视频压制引擎（FFmpeg）
 $("btnDownloadFFmpeg").addEventListener("click", async () => {
+  const source = $("ffmpegSource") ? $("ffmpegSource").value : "official";
+  const sourceLabel = source === "mirror" ? "国内镜像" : "官方源";
   $("btnDownloadFFmpeg").disabled = true;
-  $("ffmpegStatus").textContent = "正在下载 FFmpeg…";
+  $("btnDownloadFFmpeg").textContent = "正在下载…";
+  $("ffmpegProgressRow").style.display = "flex";
+  setEngineReady(false);
   try {
-    const result = await bridge("download_ffmpeg");
+    const result = await bridge("download_ffmpeg", { source });
+    $("ffmpegProgressRow").style.display = "none";
     if (result.downloaded) {
-      $("ffmpegStatus").textContent = "FFmpeg 下载完成，已可使用视频压缩功能。";
-      $("btnDownloadFFmpeg").style.display = "none";
+      $("ffmpegStatus").textContent = `极光视频压制引擎（${sourceLabel}）下载完成，已可使用视频压缩。`;
+      $("ffmpegDownloadRow").style.display = "none";
+      setEngineReady(true);
     } else {
-      $("ffmpegStatus").textContent = "FFmpeg 已存在，无需下载。";
-      $("btnDownloadFFmpeg").style.display = "none";
+      $("ffmpegStatus").textContent = "极光视频压制引擎已就绪，可直接使用。";
+      $("ffmpegDownloadRow").style.display = "none";
+      setEngineReady(true);
     }
   } catch (err) {
-    $("ffmpegStatus").textContent = "下载 FFmpeg 失败：" + (err.message || err);
+    $("ffmpegStatus").textContent = `下载极光视频压制引擎（${sourceLabel}）失败：${err.message || err}`;
     $("btnDownloadFFmpeg").disabled = false;
+    $("btnDownloadFFmpeg").textContent = "下载极光视频压制引擎";
+    $("ffmpegProgressRow").style.display = "none";
   }
 });
 
@@ -251,8 +271,6 @@ $("btnCancel").addEventListener("click", () => window.close());
   await loadSettings();
   await initTheme();
   await refreshCacheUsage();
-  // If compress is already enabled, check FFmpeg on load
-  if ($("compress_oversize_videos").checked) {
-    checkFFmpeg();
-  }
+  // 极光视频压制引擎（FFmpeg）状态检查：决定压缩复选框是否可勾选
+  checkFFmpeg();
 })();

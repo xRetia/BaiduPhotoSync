@@ -22,7 +22,7 @@ const {
   FileCompareMode,
 } = require("./src/sync_engine");
 const { VideoCompressionOptions, VideoCompressionError, locate_ffmpeg } = require("./src/video_compression");
-const { FFmpegDownloadError, ensure_windows_ffmpeg } = require("./src/ffmpeg_downloader");
+const { FFmpegDownloadError, SOURCES, ensure_windows_ffmpeg } = require("./src/ffmpeg_downloader");
 const { app_data_directory, clear_windows_registry_settings, remove_application_data } = require("./src/platform_services");
 const { validate_media_file, free_user_size_message } = require("./src/media_validation");
 const log = require("./src/logger");
@@ -1428,13 +1428,16 @@ async function handleMethod(method, params, sender) {
 
   if (method === "download_ffmpeg") {
     try {
+      // 下载源：official（官方）或 mirror（国内镜像）
+      const source = params.source === SOURCES.MIRROR ? SOURCES.MIRROR : SOURCES.OFFICIAL;
       const result = await ensure_windows_ffmpeg((value, text) => {
         if (sender && !sender.isDestroyed()) {
           sender.send("bridge:progress", value, text);
         }
-      });
+      }, source);
       return {
         downloaded: result.downloaded,
+        source: source === SOURCES.MIRROR ? "mirror" : "official",
         ffmpeg_path: result.ffmpegPath,
         ffprobe_path: result.ffprobePath,
       };
