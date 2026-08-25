@@ -382,7 +382,7 @@ function createQRLoginWindow() {
   }
 
   qrWindow = new BrowserWindow({
-    width: 730,
+    width: 370,
     height: 520,
     resizable: false,
     minimizable: false,
@@ -406,55 +406,25 @@ function createQRLoginWindow() {
   // 防止页面 <title> 覆盖窗口标题
   qrWindow.on("page-title-updated", (e) => e.preventDefault());
 
-  // 注入 CSS：左侧插入图片，右侧显示登录弹窗
-  // 窗口 730×520 = 左侧 360px 图片 + 右侧 370px 二维码
+  // 注入 CSS：隐藏百度页面多余内容，只显示登录弹窗
   const LOGIN_HIDE_CSS = `
-    body { display: flex !important; flex-direction: row !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
     .header, .flastupload-guide, .box, .features, .box-mark1, .box-mark2, .box-desc1, .box-desc2 { display: none !important; }
-    .main { display: none !important; }
-    /* 左侧图片区域 */
-    .yike-login-splash {
-      width: 360px !important;
-      min-width: 360px !important;
-      height: 520px !important;
-      background: url('file://${path.join(__dirname, "assets", "login-splash.png").replace(/\\\\/g, "/")}') center/cover no-repeat !important;
-    }
-    /* 右侧二维码区域 */
+    .main { background: #ffffff !important; height: 100% !important; padding: 0 !important; margin: 0 !important; }
     .login-pop {
       position: fixed !important;
       top: 0 !important;
-      left: 360px !important;
+      left: 0 !important;
       right: 0 !important;
       bottom: 0 !important;
-      width: 370px !important;
-      height: 520px !important;
+      width: 100% !important;
+      height: 100% !important;
       transform: none !important;
       margin: 0 !important;
       padding: 0 !important;
       border-radius: 0 !important;
       box-shadow: none !important;
       border: none !important;
-      background: #ffffff !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
     }
-  `;
-
-  // 注入 JS：在 body 最前面插入图片 div
-  const LOGIN_INJECT_JS = `
-    (function() {
-      function ensureSplash() {
-        if (document.getElementById('yike-login-splash')) return;
-        var div = document.createElement('div');
-        div.id = 'yike-login-splash';
-        div.className = 'yike-login-splash';
-        document.body.insertBefore(div, document.body.firstChild);
-      }
-      if (document.body) { ensureSplash(); }
-      var observer = new MutationObserver(function() { ensureSplash(); });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
-    })();
   `;
 
   let navigateHidden = false; // qrWindow 是否因页面跳转而隐藏
@@ -472,10 +442,9 @@ function createQRLoginWindow() {
     }
   }
 
-  // 每次页面 dom-ready 时都注入 CSS 和 JS（页面跳转后 DOM 重建需重新注入）
+  // 每次页面 dom-ready 时都注入 CSS（页面跳转后 DOM 重建需重新注入）
   qrWindow.webContents.on("dom-ready", () => {
     qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
-    qrWindow.webContents.executeJavaScript(LOGIN_INJECT_JS).catch(() => {});
   });
 
   // 页面跳转时立即隐藏 qrWindow，显示 loading，后台继续提取 cookie
@@ -789,8 +758,6 @@ function createLogoutWindow(cookieJson) {
       resizable: false,
       minimizable: false,
       maximizable: false,
-      parent: mainWindow,
-      modal: true,
       webPreferences: {
         partition: "logout",
         contextIsolation: true,
