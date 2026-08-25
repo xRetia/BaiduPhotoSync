@@ -579,10 +579,35 @@ function createQRLoginWindow() {
 
 // ========== 登出窗口 ==========
 
-const LOGOUT_URL = "https://passport.baidu.com/?logout&u=https%3A%2F%2Fphoto.baidu.com%2Fphoto%2Fweb%2Falbum";
-const LOGOUT_HOME_URL = "https://photo.baidu.com/";
-const LOGOUT_PASSPORT_URL = "https://passport.baidu.com/";
+const LOGOUT_HOME_URL = "https://photo.baidu.com/photo/web/home";
+const LOGOUT_COOKIE_URL = "https://photo.baidu.com/";
 const LOGOUT_TIMEOUT_MS = 30 * 1000; // 30 秒超时
+
+// JS：在百度相册页面中找到并点击"退出登录"按钮
+const LOGOUT_CLICK_JS = `
+  (function() {
+    function tryClickLogout() {
+      // 百度相册页面用户头像下拉菜单中的"退出登录"按钮
+      // 尝试多种选择器，适配页面可能的 DOM 变化
+      var selectors = [
+        '.user-name .logout',
+        '.header-user .logout',
+        '.user-info .logout',
+        '[class*="logout"]',
+        '[data-action="logout"]',
+      ];
+      for (var i = 0; i < selectors.length; i++) {
+        var el = document.querySelector(selectors[i]);
+        if (el) { el.click(); return 'clicked: ' + selectors[i]; }
+      }
+      // 如果退出按钮在菜单里，可能需要先点击头像展开菜单
+      var avatar = document.querySelector('.user-name, .header-user, .user-info, [class*="avatar"], [class*="user"]');
+      if (avatar) { avatar.click(); }
+      return 'avatar_clicked';
+    }
+    return tryClickLogout();
+  })();
+`;
 
 function createLogoutWindow(cookieJson) {
   return new Promise((resolve) => {
@@ -605,12 +630,15 @@ function createLogoutWindow(cookieJson) {
 
     const ses = logoutWindow.webContents.session;
     let logoutTimeoutTimer = null;
+    let clickRetryTimer = null;
     let resolved = false;
+    let clickAttempts = 0;
 
     function finish(result) {
       if (resolved) return;
       resolved = true;
       if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
+      if (clickRetryTimer) { clearTimeout(clickRetryTimer); clickRetryTimer = null; }
       if (logoutWindow && !logoutWindow.isDestroyed()) {
         logoutWindow.destroy();
       }
@@ -619,8 +647,7 @@ function createLogoutWindow(cookieJson) {
       resolve(result);
     }
 
-    // 监听导航：登出流程 passport.baidu.com → 302 → photo.baidu.com/album → 302 → photo.baidu.com/login
-    // 检测最终 URL 是否跳到登录页来判断登出成功
+    // 检测页面跳转到登录页 = 登出成功
     logoutWindow.webContents.on("did-navigate", (_e, url) => {
       console.debug(`登出：页面导航到 ${url}`);
       if (url.includes("photo.baidu.com/photo/web/login")) {
@@ -634,15 +661,41 @@ function createLogoutWindow(cookieJson) {
       console.debug(`登出：页面加载完成，当前 URL=${url}`);
       if (url.includes("photo.baidu.com/photo/web/login")) {
         finish({ success: true });
+        return;
       }
+      // 页面加载完成，尝试点击退出登录
+      tryClickLogout();
     });
 
     logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
       console.warn(`登出：页面加载失败 ${errorCode} ${errorDescription}`);
     });
 
+    function tryClickLogout() {
+      if (resolved || !logoutWindow || logoutWindow.isDestroyed()) return;
+      if (clickAttempts >= 10) {
+        console.warn("登出：点击退出按钮尝试已达上限");
+        return;
+      }
+      clickAttempts++;
+      logoutWindow.webContents.executeJavaScript(LOGOUT_CLICK_JS).then((result) => {
+        console.debug(`登出：第 ${clickAttempts} 次尝试点击退出按钮 → ${result}`);
+        if (result && result.startsWith("clicked")) {
+          // 点击成功，等待页面跳转
+          console.debug("登出：已点击退出按钮，等待页面跳转");
+        } else {
+          // 可能点了头像但菜单没展开，稍后重试
+          console.debug(`登出：未找到退出按钮，2 秒后重试`);
+          clickRetryTimer = setTimeout(tryClickLogout, 2000);
+        }
+      }).catch((err) => {
+        console.warn(`登出：点击退出按钮出错: ${err.message || err}`);
+        clickRetryTimer = setTimeout(tryClickLogout, 2000);
+      });
+    }
+
     async function startLogout() {
-      // 注入当前 cookie 到所有相关域名
+      // 注入当前 cookie
       try {
         const cookies = JSON.parse(cookieJson);
         console.debug(`登出：解析到 ${cookies.length} 个 cookie`);
@@ -651,21 +704,17 @@ function createLogoutWindow(cookieJson) {
           if (!c.name || !c.value) continue;
           const domain = c.domain || ".baidu.com";
           if (!isBaiduDomain(domain)) continue;
-          const normalizedDomain = domain.startsWith(".") ? domain : "." + domain;
-          // cookie 需要同时关联到 photo.baidu.com 和 passport.baidu.com
-          for (const url of [LOGOUT_HOME_URL, LOGOUT_PASSPORT_URL]) {
-            setPromises.push(
-              ses.cookies.set({
-                name: c.name,
-                value: c.value,
-                domain: normalizedDomain,
-                path: c.path || "/",
-                url: url,
-                secure: c.secure != null ? c.secure : false,
-                httpOnly: c.httpOnly != null ? c.httpOnly : false,
-              }).catch(() => {})
-            );
-          }
+          setPromises.push(
+            ses.cookies.set({
+              name: c.name,
+              value: c.value,
+              domain: domain.startsWith(".") ? domain : "." + domain,
+              path: c.path || "/",
+              url: LOGOUT_COOKIE_URL,
+              secure: c.secure != null ? c.secure : false,
+              httpOnly: c.httpOnly != null ? c.httpOnly : false,
+            }).catch(() => {})
+          );
         }
         await Promise.all(setPromises);
         console.debug("登出：cookie 注入完成");
@@ -685,9 +734,9 @@ function createLogoutWindow(cookieJson) {
       }
       console.debug("登出：BDUSS cookie 已确认注入");
 
-      // 访问登出 URL
-      console.debug(`登出：加载 ${LOGOUT_URL}`);
-      logoutWindow.loadURL(LOGOUT_URL);
+      // 加载百度相册首页
+      console.debug(`登出：加载 ${LOGOUT_HOME_URL}`);
+      logoutWindow.loadURL(LOGOUT_HOME_URL);
 
       // 30 秒超时
       logoutTimeoutTimer = setTimeout(() => {
