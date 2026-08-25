@@ -589,6 +589,8 @@ function createLogoutWindow(cookieJson) {
       logoutWindow.destroy();
     }
 
+    console.debug(`登出：准备注入 cookie，cookieJson 长度=${cookieJson ? cookieJson.length : 0}`);
+
     logoutWindow = new BrowserWindow({
       width: 400,
       height: 300,
@@ -604,6 +606,8 @@ function createLogoutWindow(cookieJson) {
     let logoutCheckTimer = null;
     let logoutTimeoutTimer = null;
     let resolved = false;
+    let pageLoaded = false;
+    let initialBdussFound = false;
 
     function finish(result) {
       if (resolved) return;
@@ -614,13 +618,56 @@ function createLogoutWindow(cookieJson) {
         logoutWindow.destroy();
       }
       logoutWindow = null;
+      console.debug(`登出：结束，结果=${JSON.stringify(result)}`);
       resolve(result);
+    }
+
+    // 监听页面加载完成
+    logoutWindow.webContents.on("did-finish-load", () => {
+      pageLoaded = true;
+      console.debug("登出：页面加载完成，开始检测 cookie 状态");
+      // 加载完成后立即检查一次
+      checkBduss();
+    });
+
+    logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
+      console.warn(`登出：页面加载失败 ${errorCode} ${errorDescription}`);
+    });
+
+    logoutWindow.webContents.on("did-navigate", (_e, url) => {
+      console.debug(`登出：页面导航到 ${url}`);
+    });
+
+    function checkBduss() {
+      ses.cookies.get({}).then((cookies) => {
+        const bduss = cookies.find(
+          (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
+        );
+        if (!initialBdussFound) {
+          if (bduss) {
+            initialBdussFound = true;
+            console.debug("登出：初始 BDUSS cookie 已确认存在");
+          } else if (pageLoaded) {
+            // 页面已加载完但仍无 BDUSS，可能 cookie 注入失败或登出已完成
+            console.debug("登出：页面加载后未找到 BDUSS");
+            finish({ success: true });
+            return;
+          }
+        }
+        if (initialBdussFound && !bduss) {
+          console.debug("登出：BDUSS cookie 已消失，退出成功");
+          finish({ success: true });
+        }
+      }).catch((err) => {
+        console.warn("登出：检查 cookie 出错:", err.message || err);
+      });
     }
 
     async function startLogout() {
       // 注入当前 cookie
       try {
         const cookies = JSON.parse(cookieJson);
+        console.debug(`登出：解析到 ${cookies.length} 个 cookie`);
         const setPromises = [];
         for (const c of cookies) {
           if (!c.name || !c.value) continue;
@@ -639,25 +686,30 @@ function createLogoutWindow(cookieJson) {
           );
         }
         await Promise.all(setPromises);
-      } catch {
-        // cookie 解析失败，继续尝试
+        console.debug("登出：cookie 注入完成");
+      } catch (err) {
+        console.warn("登出：cookie 注入失败:", err.message || err);
       }
 
+      // 确认 BDUSS 已注入
+      const injected = await ses.cookies.get({});
+      const bdussInjected = injected.find(
+        (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
+      );
+      if (!bdussInjected) {
+        console.warn("登出：BDUSS cookie 未成功注入，无法登出");
+        finish({ success: false, reason: "no_bduss" });
+        return;
+      }
+      initialBdussFound = true;
+      console.debug("登出：BDUSS cookie 已确认注入");
+
       // 访问登出 URL
+      console.debug(`登出：加载 ${LOGOUT_URL}`);
       logoutWindow.loadURL(LOGOUT_URL);
 
-      // 轮询检测 BDUSS cookie 是否消失
-      logoutCheckTimer = setInterval(() => {
-        ses.cookies.get({}).then((cookies) => {
-          const bduss = cookies.find(
-            (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
-          );
-          if (!bduss) {
-            console.debug("登出：BDUSS cookie 已消失，退出成功");
-            finish({ success: true });
-          }
-        }).catch(() => {});
-      }, 1000);
+      // 轮询检测 BDUSS cookie 是否消失（页面加载后开始生效）
+      logoutCheckTimer = setInterval(checkBduss, 1000);
 
       // 30 秒超时
       logoutTimeoutTimer = setTimeout(() => {
@@ -1222,9 +1274,12 @@ ipcMain.handle("qr-login:open", () => {
 // ========== 登出 IPC ==========
 
 ipcMain.handle("logout:start", async () => {
-  if (!cookieText) return { success: false, reason: "no_session" };
+  if (!client) return { success: false, reason: "no_client" };
+  // 用 client 内部最新 cookie，而非全局 cookieText（对齐 Python export_cookie_json）
+  const currentCookieJson = client.exportCookieJson();
+  if (!currentCookieJson) return { success: false, reason: "no_session" };
   stopKeepalive();
-  const result = await createLogoutWindow(cookieText);
+  const result = await createLogoutWindow(currentCookieJson);
   return result;
 });
 
