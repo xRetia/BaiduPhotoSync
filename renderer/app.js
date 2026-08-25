@@ -862,7 +862,14 @@ $("btnConnect").addEventListener("click", () => {
 
 async function logout() {
   if (state.syncMode !== "idle") { toast("请先暂停或停止同步再退出登录。", "warning"); return; }
+  showLogoutLoading();
   try {
+    const result = await window.api.startLogout();
+    if (!result.success) {
+      hideLogoutLoading();
+      toast("登出超时，未检测到会话失效，本机登录信息仍保留。", "warning");
+      return;
+    }
     await bridge("clear_session");
     await bridge("disconnect");
     state.connected = false;
@@ -872,9 +879,43 @@ async function logout() {
     $("planTableBody").innerHTML = ""; $("syncAlbumTree").innerHTML = "";
     $("mediaTitle").textContent = "选择一个相册以浏览媒体";
     $("planSummary").textContent = "尚未比较";
+    hideLogoutLoading();
     setStatus("已退出登录，请重新扫码登录。");
     openQRLogin();
-  } catch (err) { toast("退出登录失败: " + err.message, "error"); }
+  } catch (err) {
+    hideLogoutLoading();
+    toast("退出登录失败: " + err.message, "error");
+  }
+}
+
+function showLogoutLoading() {
+  let overlay = document.getElementById("logout-loading-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "logout-loading-overlay";
+    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.95);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;";
+    const title = document.createElement("div");
+    title.textContent = "正在退出登录";
+    title.style.cssText = "font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;";
+    const hint = document.createElement("div");
+    hint.textContent = "正在清除百度账户会话，请勿关闭窗口。";
+    hint.style.cssText = "font-size:14px;color:#718096;margin-bottom:24px;";
+    const spinner = document.createElement("div");
+    spinner.style.cssText = "width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;";
+    const style = document.createElement("style");
+    style.textContent = "@keyframes yike-spin{to{transform:rotate(360deg)}}";
+    overlay.appendChild(style);
+    overlay.appendChild(title);
+    overlay.appendChild(hint);
+    overlay.appendChild(spinner);
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = "flex";
+}
+
+function hideLogoutLoading() {
+  const overlay = document.getElementById("logout-loading-overlay");
+  if (overlay) overlay.style.display = "none";
 }
 
 $("btnRefresh").addEventListener("click", () => refreshAlbums());

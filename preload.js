@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("api", {
   closeQRLogin: () => ipcRenderer.send("qr-login:close"),
   retryQRLogin: () => ipcRenderer.send("qr-login:retry"),
 
+  // Logout
+  startLogout: () => ipcRenderer.invoke("logout:start"),
+
   // Bridge event listeners (progress/status/alert)
   onProgress: (callback) => {
     ipcRenderer.on("bridge:progress", (_e, value, text) => callback(value, text));

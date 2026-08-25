@@ -33,6 +33,7 @@ const DOWNLOAD_CACHE_DEFAULT_MIB = 1024;
 
 let mainWindow = null;
 let qrWindow = null;
+let logoutWindow = null;
 let settingsWindow = null;
 let syncResultWindow = null;
 let client = null; // YikeRemoteClient 实例
@@ -391,13 +392,14 @@ function createQRLoginWindow() {
   let submitted = false;       // 是否已提交候选 cookie
   let cookieCheckTimer = null; // cookie 轮询定时器
 
-  // 在 QR 窗口中注入 loading 遮罩（参照 Python 版的 _create_loading_overlay）
+  // 在 QR 窗口中注入 loading 遮罩（参照 Python 版 _create_loading_overlay / _set_loading）
+  // 遮罩在 BDUSS 出现时即时创建+显示，不依赖提前注入
   const OVERLAY_JS = `
     (function() {
       if (document.getElementById('yike-login-overlay')) return;
       var overlay = document.createElement('div');
       overlay.id = 'yike-login-overlay';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:999999;display:none;align-items:center;justify-content:center;flex-direction:column;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
       var title = document.createElement('div');
       title.textContent = '正在登录，请稍候';
       title.style.cssText = 'font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';
@@ -408,21 +410,33 @@ function createQRLoginWindow() {
       spinner.style.cssText = 'width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';
       var style = document.createElement('style');
       style.textContent = '@keyframes yike-spin{to{transform:rotate(360deg)}}';
+      overlay.appendChild(style);
       overlay.appendChild(title);
       overlay.appendChild(hint);
       overlay.appendChild(spinner);
-      overlay.appendChild(style);
-      document.body.appendChild(overlay);
+      document.documentElement ? document.documentElement.appendChild(overlay) : document.body.appendChild(overlay);
     })();
   `;
+  // dom-ready 时预注入遮罩 DOM（display:flex），但用 CSS 隐藏 body 内容
   qrWindow.webContents.on("dom-ready", () => {
     qrWindow.webContents.executeJavaScript(OVERLAY_JS).catch(() => {});
   });
 
   function showQROverlay() {
     if (qrWindow && !qrWindow.isDestroyed()) {
+      // 即时注入+显示遮罩，不依赖预注入的 DOM
       qrWindow.webContents.executeJavaScript(
-        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='flex';}"
+        "(function(){" +
+        "if(!document.getElementById('yike-login-overlay')){" +
+        "var o=document.createElement('div');o.id='yike-login-overlay';" +
+        "o.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;';" +
+        "var t=document.createElement('div');t.textContent='正在登录，请稍候';t.style.cssText='font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';" +
+        "var h=document.createElement('div');h.textContent='正在验证一刻相册访问权限，请勿关闭窗口。';h.style.cssText='font-size:14px;color:#718096;margin-bottom:24px;';" +
+        "var s=document.createElement('div');s.style.cssText='width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';" +
+        "var st=document.createElement('style');st.textContent='@keyframes yike-spin{to{transform:rotate(360deg)}}';" +
+        "o.appendChild(st);o.appendChild(t);o.appendChild(h);o.appendChild(s);" +
+        "(document.documentElement||document.body).appendChild(o);}" +
+        "})();"
       ).catch(() => {});
     }
   }
@@ -565,6 +579,99 @@ function createQRLoginWindow() {
   });
 
   return qrWindow;
+}
+
+// ========== 登出窗口 ==========
+
+const LOGOUT_URL = "https://passport.baidu.com/?logout&u=https%3A%2F%2Fphoto.baidu.com%2Fphoto%2Fweb%2Falbum";
+const LOGOUT_HOME_URL = "https://photo.baidu.com/";
+const LOGOUT_TIMEOUT_MS = 30 * 1000; // 30 秒超时
+
+function createLogoutWindow(cookieJson) {
+  return new Promise((resolve) => {
+    if (logoutWindow && !logoutWindow.isDestroyed()) {
+      logoutWindow.destroy();
+    }
+
+    logoutWindow = new BrowserWindow({
+      width: 400,
+      height: 300,
+      show: false,
+      webPreferences: {
+        partition: "logout",
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    const ses = logoutWindow.webContents.session;
+    let logoutCheckTimer = null;
+    let logoutTimeoutTimer = null;
+    let resolved = false;
+
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
+      if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
+      if (logoutWindow && !logoutWindow.isDestroyed()) {
+        logoutWindow.destroy();
+      }
+      logoutWindow = null;
+      resolve(result);
+    }
+
+    async function startLogout() {
+      // 注入当前 cookie
+      try {
+        const cookies = JSON.parse(cookieJson);
+        const setPromises = [];
+        for (const c of cookies) {
+          if (!c.name || !c.value) continue;
+          const domain = c.domain || ".baidu.com";
+          if (!isBaiduDomain(domain)) continue;
+          setPromises.push(
+            ses.cookies.set({
+              name: c.name,
+              value: c.value,
+              domain: domain.startsWith(".") ? domain : "." + domain,
+              path: c.path || "/",
+              url: LOGOUT_HOME_URL,
+              secure: c.secure != null ? c.secure : false,
+              httpOnly: c.httpOnly != null ? c.httpOnly : false,
+            }).catch(() => {})
+          );
+        }
+        await Promise.all(setPromises);
+      } catch {
+        // cookie 解析失败，继续尝试
+      }
+
+      // 访问登出 URL
+      logoutWindow.loadURL(LOGOUT_URL);
+
+      // 轮询检测 BDUSS cookie 是否消失
+      logoutCheckTimer = setInterval(() => {
+        ses.cookies.get({}).then((cookies) => {
+          const bduss = cookies.find(
+            (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
+          );
+          if (!bduss) {
+            console.debug("登出：BDUSS cookie 已消失，退出成功");
+            finish({ success: true });
+          }
+        }).catch(() => {});
+      }, 1000);
+
+      // 30 秒超时
+      logoutTimeoutTimer = setTimeout(() => {
+        console.warn("登出：超时，BDUSS 仍然存在");
+        finish({ success: false, reason: "timeout" });
+      }, LOGOUT_TIMEOUT_MS);
+    }
+
+    startLogout();
+  });
 }
 
 // ========== 设置窗口 ==========
@@ -1114,6 +1221,15 @@ ipcMain.handle("bridge:call", async (event, method, params) => {
 
 ipcMain.handle("qr-login:open", () => {
   createQRLoginWindow();
+});
+
+// ========== 登出 IPC ==========
+
+ipcMain.handle("logout:start", async () => {
+  if (!cookieText) return { success: false, reason: "no_session" };
+  stopKeepalive();
+  const result = await createLogoutWindow(cookieText);
+  return result;
 });
 
 // ========== 设置窗口 IPC ==========
