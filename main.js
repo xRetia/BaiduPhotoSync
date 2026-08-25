@@ -412,6 +412,9 @@ function createQRLoginWindow() {
 
   function showLoading() {
     if (loadingWindow && !loadingWindow.isDestroyed()) {
+      const [x, y] = qrWindow.getPosition();
+      const [w, h] = qrWindow.getSize();
+      loadingWindow.setBounds({ x, y, width: w, height: h });
       loadingWindow.show();
       return;
     }
@@ -423,10 +426,10 @@ function createQRLoginWindow() {
       resizable: false,
       minimizable: false,
       maximizable: false,
-      parent: qrWindow,
       focusable: false,
       skipTaskbar: true,
       show: true,
+      alwaysOnTop: true,
       webPreferences: { contextIsolation: true, nodeIntegration: false },
     });
     loadingWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(loadingHTML));
@@ -517,15 +520,16 @@ function createQRLoginWindow() {
     submitted = true;
     clearInterval(cookieCheckTimer);
     cookieCheckTimer = null;
-    // 显示 loading 窗口盖住整个 webview
-    showLoading();
 
+    // 先提取 cookie，再显示 loading（避免 loading 窗口干扰 webContents）
     ses.cookies.get({}).then((cookies) => {
       const cookieJson = JSON.stringify(
         cookies
           .filter((c) => c.domain && c.domain.includes("baidu.com"))
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain }))
       );
+      // 提取完成后再显示 loading 窗口盖住 webview
+      showLoading();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("qr-login-cookie", cookieJson);
       }
