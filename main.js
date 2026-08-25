@@ -475,13 +475,14 @@ function createQRLoginWindow() {
   });
 
   // 页面跳转时立即隐藏 qrWindow，显示 loading，后台继续提取 cookie
+  // 只对离开登录页的跳转才触发（初始加载 loginUrl 不算）
   qrWindow.webContents.on("will-navigate", (_e, url) => {
     console.debug(`登录：页面即将跳转 → ${url}`);
-    onLoginNavigated();
+    if (!url.includes("/login")) onLoginNavigated();
   });
   qrWindow.webContents.on("did-navigate", (_e, url) => {
     console.debug(`登录：页面已跳转 → ${url}`);
-    onLoginNavigated();
+    if (!url.includes("/login")) onLoginNavigated();
   });
   qrWindow.webContents.on("did-navigate-in-page", (_e, url) => {
     // SPA 内部跳转也可能是登录成功后的路由变化
