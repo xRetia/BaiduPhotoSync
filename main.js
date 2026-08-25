@@ -296,9 +296,11 @@ function actionToDict(action) {
 // ========== 窗口创建 ==========
 
 function createMainWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 880,
+  // 读取上次的窗口位置和大小
+  const savedBounds = settings.windowBounds || {};
+  const windowOptions = {
+    width: savedBounds.width || 1400,
+    height: savedBounds.height || 880,
     minWidth: 880,
     minHeight: 520,
     title: "一刻同步",
@@ -310,18 +312,19 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
-
-  mainWindow.loadFile(path.join(RENDERER, "index.html"));
-
-  // 主窗口在 ready-to-show 时显示，但 loading overlay 会覆盖整个窗口
-  // 直到登录完成才隐藏 overlay
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
-  });
+  };
+  if (savedBounds.x !== undefined && savedBounds.y !== undefined) {
+    windowOptions.x = savedBounds.x;
+    windowOptions.y = savedBounds.y;
+  }
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.on("close", (e) => {
+    // 保存窗口位置和大小
     if (mainWindow && !mainWindow.isDestroyed()) {
+      const bounds = mainWindow.getBounds();
+      settings.windowBounds = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      saveSettings(settings);
       e.preventDefault();
       mainWindow.webContents.send("app-close-requested");
     }

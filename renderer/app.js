@@ -216,7 +216,12 @@ window.api.onQRLoginLoadingHide(() => {
 
 window.api.onQRLoginClosed(() => {
   hideLoginLoading();
-  if (!state.connected) { setStatus("登录已取消。"); setProgress(0, "就绪"); }
+  if (!state.connected) {
+    setStatus("登录已取消。");
+    setProgress(0, "就绪");
+    // 未登录关闭登录窗口，退出应用
+    window.api.quit();
+  }
 });
 
 // === Login loading overlay (样式对齐退出登录) ===
