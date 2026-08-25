@@ -369,10 +369,13 @@ function createQRLoginWindow() {
   const loginUrl = "https://photo.baidu.com/photo/web/login";
   qrWindow.loadURL(loginUrl);
 
+  // 防止页面 <title> 覆盖窗口标题
+  qrWindow.on("page-title-updated", (e) => e.preventDefault());
+
   // 注入 CSS：隐藏百度页面多余内容，只显示登录弹窗
   const LOGIN_HIDE_CSS = `
     .header, .flastupload-guide, .box, .features, .box-mark1, .box-mark2, .box-desc1, .box-desc2 { display: none !important; }
-    .main { background: #f5f7fa !important; }
+    .main { background: #f5f7fa !important; height: 100% !important; }
     .login-pop { position: fixed !important; top: 50% !important; left: 50% !important; right: auto !important; transform: translate(-50%, -50%) !important; }
   `;
   qrWindow.webContents.on("dom-ready", () => {
