@@ -696,12 +696,18 @@ function createLogoutWindow(cookieJson) {
       width: 400,
       height: 350,
       show: false,
+      autoHideMenuBar: true,
+      title: "退出",
+      icon: path.join(__dirname, "assets", "yike_sync.ico"),
       webPreferences: {
         partition: "logout",
         contextIsolation: true,
         nodeIntegration: false,
       },
     });
+
+    // 防止页面 <title> 覆盖窗口标题
+    logoutWindow.on("page-title-updated", (e) => e.preventDefault());
 
     const ses = logoutWindow.webContents.session;
     let logoutTimeoutTimer = null;

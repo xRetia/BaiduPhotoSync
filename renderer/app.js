@@ -889,7 +889,7 @@ function showSyncResult(actions) {
 // === Other buttons ===
 $("btnConnect").addEventListener("click", () => {
   if (state.connected) {
-    if (confirm("退出登录\n确认退出当前登录的账号吗？\n退出后需要重新扫码登录。")) logout();
+    logout();
     return;
   }
   openQRLogin();
