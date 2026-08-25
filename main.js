@@ -319,6 +319,13 @@ function createMainWindow() {
   }
   mainWindow = new BrowserWindow(windowOptions);
 
+  mainWindow.loadFile(path.join(RENDERER, "index.html"));
+
+  // 主窗口在 ready-to-show 时显示
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
+
   mainWindow.on("close", (e) => {
     // 保存窗口位置和大小
     if (mainWindow && !mainWindow.isDestroyed()) {
