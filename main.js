@@ -324,7 +324,7 @@ function createMainWindow() {
   const windowOptions = {
     width: savedBounds.width || 1400,
     height: savedBounds.height || 880,
-    minWidth: 880,
+    minWidth: 1000,
     minHeight: 520,
     title: "一刻同步",
     icon: path.join(__dirname, "assets", "yike_sync.ico"),
@@ -685,20 +685,28 @@ const LOGOUT_INJECT_JS = `
       var card = document.createElement('div');
       card.style.cssText = 'text-align:center;';
       var icon = document.createElement('div');
-      icon.style.cssText = 'width:48px;height:48px;margin:0 auto 16px;border-radius:50%;background:#fee;display:flex;align-items:center;justify-content:center;font-size:24px;color:#e53e3e;';
-      icon.textContent = '\\u21A2';
+      icon.style.cssText = 'width:52px;height:52px;margin:0 auto 16px;border-radius:50%;background:#fee;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#e53e3e;line-height:1;';
+      icon.textContent = '!';
       var title = document.createElement('div');
       title.textContent = '退出百度账户';
       title.style.cssText = 'font-size:18px;font-weight:700;color:#2d3748;margin-bottom:8px;';
       var hint = document.createElement('div');
       hint.textContent = '点击下方按钮退出当前登录的百度账户，退出后需重新扫码登录。';
       hint.style.cssText = 'font-size:13px;color:#718096;margin-bottom:24px;line-height:1.6;max-width:280px;';
+      var btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:12px;justify-content:center;';
       var btn = document.createElement('button');
       btn.id = 'yike-logout-btn';
       btn.textContent = '退出登录';
-      btn.style.cssText = 'background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:10px 32px;font-size:15px;font-weight:600;cursor:pointer;transition:background 0.2s;';
+      btn.style.cssText = 'background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:15px;font-weight:600;cursor:pointer;transition:background 0.2s;';
       btn.onmouseover = function() { btn.style.background = '#c53030'; };
       btn.onmouseout = function() { btn.style.background = '#e53e3e'; };
+      var cancelBtn = document.createElement('button');
+      cancelBtn.textContent = '取消';
+      cancelBtn.style.cssText = 'background:#fff;color:#4a5568;border:1px solid #cbd5e0;border-radius:8px;padding:10px 28px;font-size:15px;font-weight:600;cursor:pointer;transition:all 0.2s;';
+      cancelBtn.onmouseover = function() { cancelBtn.style.background = '#edf2f7'; cancelBtn.style.borderColor = '#a0aec0'; };
+      cancelBtn.onmouseout = function() { cancelBtn.style.background = '#fff'; cancelBtn.style.borderColor = '#cbd5e0'; };
+      cancelBtn.onclick = function() { window.close(); };
       btn.onclick = function() {
         btn.disabled = true;
         btn.textContent = '正在退出...';
@@ -741,10 +749,12 @@ const LOGOUT_INJECT_JS = `
         }
         retry();
       };
+      btnRow.appendChild(btn);
+      btnRow.appendChild(cancelBtn);
       card.appendChild(icon);
       card.appendChild(title);
       card.appendChild(hint);
-      card.appendChild(btn);
+      card.appendChild(btnRow);
       page.appendChild(card);
       document.body.appendChild(page);
     }
@@ -780,6 +790,9 @@ function createLogoutWindow(cookieJson) {
       resizable: false,
       minimizable: false,
       maximizable: false,
+      alwaysOnTop: true,
+      modal: false,
+      parent: mainWindow || undefined,
       webPreferences: {
         partition: "logout",
         contextIsolation: true,
@@ -792,14 +805,12 @@ function createLogoutWindow(cookieJson) {
 
     const ses = logoutWindow.webContents.session;
     let logoutTimeoutTimer = null;
-    let logoutCheckTimer = null;
     let resolved = false;
 
     function finish(result) {
       if (resolved) return;
       resolved = true;
       if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
-      if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
       if (injectInterval) { clearInterval(injectInterval); injectInterval = null; }
       if (logoutWindow && !logoutWindow.isDestroyed()) {
         logoutWindow.destroy();
@@ -825,25 +836,8 @@ function createLogoutWindow(cookieJson) {
         finish({ success: true });
       }
     });
-    // 登出成功 = BDUSS 从会话中消失（对齐 Python 版 _check_logout_state：
-    // 监听 cookie 变化后检查认证 Cookie 是否仍在）。
-    // 注意：Electron 的 cookies.on('changed') 没有第 4 个 removed 参数，
-    // 因此用轮询判断 BDUSS 是否还存在，而不是依赖事件。
-    function checkBdussGone() {
-      ses.cookies.get({}).then((cookies) => {
-        const stillLoggedIn = cookies.some(
-          (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
-        );
-        if (!stillLoggedIn) {
-          log.debug("logout", "登出：BDUSS cookie 已消失，登出成功");
-          finish({ success: true });
-        }
-      }).catch(() => {});
-    }
-    ses.cookies.on("changed", () => {
-      // cookie 变化即触发一次检查（轻量，真正判定交给 checkBdussGone）
-      checkBdussGone();
-    });
+    // 仅以“点击页面退出登录后自动跳转到登录页”作为登出成功的判定，
+    // 不再监听 cookie 变化（避免 clearStorageData / 注入阶段误判 BDUSS 消失）。
 
     let injectInterval = null;
 
@@ -932,21 +926,11 @@ function createLogoutWindow(cookieJson) {
       }
       log.debug("logout", "登出：BDUSS cookie 已确认注入");
 
-      // 加载百度相册首页
+      // 加载百度相册首页，等待用户点击“退出登录”后页面自动跳转到登录页
       log.debug("logout", `登出：加载 ${LOGOUT_HOME_URL}`);
       logoutWindow.loadURL(LOGOUT_HOME_URL);
 
-      // 轮询检测 BDUSS 是否消失（对齐 Python 版：cookie 移除即登出成功）。
-      // 即使百度通过 SPA 退出而未发生整页跳转，也能可靠判定登出。
-      logoutCheckTimer = setInterval(() => {
-        if (!logoutWindow || logoutWindow.isDestroyed()) {
-          if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
-          return;
-        }
-        checkBdussGone();
-      }, 1000);
-
-      // 30 秒超时
+      // 30 秒超时（用户未点击退出或跳转未触发）
       logoutTimeoutTimer = setTimeout(() => {
         log.warn("login", "登出：超时，未跳转到登录页");
         finish({ success: false, reason: "timeout" });

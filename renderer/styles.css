@@ -329,11 +329,16 @@ body {
   font-size: 14px;
   font-weight: 600;
   color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
-.pane-title.elided { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.pane-title.elided { max-width: 100%; }
 
-.pane-actions { display: flex; gap: 4px; align-items: center; }
+.pane-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
 
 /* === Album list === */
 .album-list {
@@ -381,6 +386,13 @@ body {
   font-size: 13px;
 }
 
+/* 列表视图：默认占满 media-view-area；名称列不足 180px 时保持最小宽度并横向滚动 */
+#mediaDetailView .data-table {
+  /* 固定列合计 70+90+140+90=390px，加上名称列最小 180px */
+  table-layout: fixed;
+  min-width: 570px;
+}
+
 .data-table thead th {
   text-align: left;
   padding: 10px 16px;
@@ -406,7 +418,13 @@ body {
 .data-table tbody tr.selected { background: var(--accent-light); }
 .data-table tbody td { padding: 9px 16px; }
 
-.col-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.col-type, .col-size, .col-time, .col-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .col-name-cell { display: flex; align-items: center; gap: 8px; }
 
@@ -560,6 +578,19 @@ body {
   overflow: auto;
 }
 
+/* 同步计划表：默认占满宽度且文字不折行；空间不足时才横向滚动 */
+.table-scroll .data-table {
+  table-layout: fixed;
+  min-width: 920px;
+}
+
+.table-scroll .data-table th,
+.table-scroll .data-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .hint-text {
   padding: 6px 16px;
   font-size: 11px;
@@ -682,14 +713,7 @@ body {
   transition: width 0.2s;
 }
 
-#progressText {
-  position: absolute;
-  right: 0;
-  top: 6px;
-  font-size: 11px;
-  color: var(--ink-3);
-  white-space: nowrap;
-}
+
 
 /* === Loading overlay === */
 .loading-overlay {

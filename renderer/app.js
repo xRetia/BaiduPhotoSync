@@ -49,14 +49,66 @@ function toast(message, type = "info", duration = 3000) {
   }, duration);
 }
 
+// --- Input dialog (替代不支持的 window.prompt) ---
+// Electron 渲染进程未实现 window.prompt，这里用自定义模态框替代。
+function showPrompt(message, defaultValue = "") {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:1000000;display:flex;align-items:center;justify-content:center;font-family:Microsoft YaHei,sans-serif;";
+    const card = document.createElement("div");
+    card.style.cssText = "background:#fff;border-radius:10px;padding:22px 24px;width:320px;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,0.2);";
+    const msg = document.createElement("div");
+    msg.textContent = message;
+    msg.style.cssText = "font-size:14px;color:#2d3748;margin-bottom:14px;white-space:pre-line;line-height:1.6;";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = defaultValue || "";
+    input.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid #cbd5e0;border-radius:6px;outline:none;";
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:10px;margin-top:18px;";
+    const cancel = document.createElement("button");
+    cancel.textContent = "取消";
+    cancel.style.cssText = "padding:7px 16px;font-size:13px;border:1px solid #cbd5e0;background:#fff;border-radius:6px;cursor:pointer;color:#4a5568;";
+    const ok = document.createElement("button");
+    ok.textContent = "确定";
+    ok.style.cssText = "padding:7px 16px;font-size:13px;border:none;background:#2577d9;color:#fff;border-radius:6px;cursor:pointer;";
+    const cleanup = () => overlay.remove();
+    ok.onclick = () => { const v = input.value; cleanup(); resolve(v); };
+    cancel.onclick = () => { cleanup(); resolve(null); };
+    input.onkeydown = (e) => { if (e.key === "Enter") ok.onclick(); else if (e.key === "Escape") cancel.onclick(); };
+    btnRow.appendChild(cancel);
+    btnRow.appendChild(ok);
+    card.appendChild(msg);
+    card.appendChild(input);
+    card.appendChild(btnRow);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
+  });
+}
+
 // --- Status & Progress ---
-function setStatus(text) { $("statusText").textContent = text; }
+// persistentStatus 保存稳态文案（登录状态、加载结果等），
+// 进度进行中时左侧状态栏会临时显示实时操作，结束后恢复稳态文案。
+let persistentStatus = "就绪";
+
+function setStatus(text) {
+  persistentStatus = text;
+  $("statusText").textContent = text;
+}
 
 function setProgress(value, text) {
   const v = Math.max(0, Math.min(100, value));
   $("progressFill").style.width = v + "%";
-  $("progressText").textContent = text || "";
-  if (text === "就绪" && v === 0) $("progressFill").style.width = "0%";
+  if (text === "就绪" && v === 0) {
+    // 进度归零进入就绪态：左侧恢复上一次的稳态状态信息
+    $("progressFill").style.width = "0%";
+    $("statusText").textContent = persistentStatus;
+    return;
+  }
+  // 操作/同步进行中或完成：让左侧状态信息体现实时进度
+  if (text) $("statusText").textContent = text;
 }
 
 // --- Bridge call ---
@@ -352,6 +404,7 @@ function renderAlbumTree() {
 async function selectAlbum(album) {
   state.currentAlbum = album;
   $("mediaTitle").textContent = album.title;
+  $("mediaTitle").title = album.title;
   setProgress(0, `正在读取 ${album.title}`);
   try {
     const media = await bridge("list_media", { album_id: album.album_id });
@@ -390,10 +443,18 @@ function renderMediaTable() {
     const nameText = el("span", "file-name-text", item.name); nameText.title = item.name;
     nameCell.appendChild(nameText);
     tr.appendChild(nameCell);
-    tr.appendChild(el("td", "", mediaType(item.name)));
-    tr.appendChild(el("td", "", formatSize(item.size)));
-    tr.appendChild(el("td", "", formatTime(item.modified_at)));
-    tr.appendChild(el("td", "", "云端媒体"));
+    const typeText = mediaType(item.name);
+    const typeCell = el("td", "col-type", typeText); typeCell.title = typeText;
+    tr.appendChild(typeCell);
+    const sizeText = formatSize(item.size);
+    const sizeCell = el("td", "col-size", sizeText); sizeCell.title = sizeText;
+    tr.appendChild(sizeCell);
+    const timeText = formatTime(item.modified_at);
+    const timeCell = el("td", "col-time", timeText); timeCell.title = timeText;
+    tr.appendChild(timeCell);
+    const statusText = "云端媒体";
+    const statusCell = el("td", "col-status", statusText); statusCell.title = statusText;
+    tr.appendChild(statusCell);
     body.appendChild(tr);
   });
 }
@@ -572,7 +633,7 @@ function getSelectedMedia() {
 
 // === Album CRUD ===
 $("btnAlbumCreate").addEventListener("click", async () => {
-  const title = prompt("新建相册\n相册名称：");
+  const title = await showPrompt("新建相册");
   if (!title || !title.trim()) return;
   setProgress(0, "正在创建相册");
   try { await bridge("create_album", { title: title.trim() }); setProgress(100, "相册创建成功"); refreshAlbums(); }
@@ -581,7 +642,7 @@ $("btnAlbumCreate").addEventListener("click", async () => {
 
 $("btnAlbumRename").addEventListener("click", async () => {
   if (!state.currentAlbum) { toast("请先在左侧选中要重命名的相册。", "info"); return; }
-  const title = prompt("重命名相册\n新名称：", state.currentAlbum.title);
+  const title = await showPrompt("重命名相册", state.currentAlbum.title);
   if (!title || !title.trim() || title.trim() === state.currentAlbum.title) return;
   setProgress(0, "正在重命名相册");
   try { await bridge("rename_album", { album_id: state.currentAlbum.album_id, title: title.trim() }); setProgress(100, "重命名成功"); refreshAlbums(); }
