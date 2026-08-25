@@ -586,26 +586,51 @@ const LOGOUT_TIMEOUT_MS = 30 * 1000; // 30 秒超时
 // JS：在百度相册页面中找到并点击"退出登录"按钮
 const LOGOUT_CLICK_JS = `
   (function() {
-    function tryClickLogout() {
-      // 百度相册页面用户头像下拉菜单中的"退出登录"按钮
-      // 尝试多种选择器，适配页面可能的 DOM 变化
+    // 在 .yk-header__popup--bottom 中查找"退出登录"列表项
+    function findLogoutItem() {
+      var containers = document.querySelectorAll('.yk-header__popup--bottom');
+      for (var i = 0; i < containers.length; i++) {
+        var items = containers[i].querySelectorAll('.list-item');
+        for (var j = 0; j < items.length; j++) {
+          if (items[j].textContent.trim() === '退出登录') return items[j];
+        }
+      }
+      // 后备：搜索页面上所有 list-item
+      var allItems = document.querySelectorAll('.list-item');
+      for (var i = 0; i < allItems.length; i++) {
+        if (allItems[i].textContent.trim() === '退出登录') return allItems[i];
+      }
+      return null;
+    }
+    // 查找触发 popover 的头像/用户区域
+    function findAvatarTrigger() {
       var selectors = [
-        '.user-name .logout',
-        '.header-user .logout',
-        '.user-info .logout',
-        '[class*="logout"]',
-        '[data-action="logout"]',
+        '.yk-header .user-info',
+        '.yk-header [class*="avatar"]',
+        '.yk-header [class*="user"]',
+        '.yk-header__right',
+        'header [class*="user"]',
+        'header [class*="avatar"]',
       ];
       for (var i = 0; i < selectors.length; i++) {
         var el = document.querySelector(selectors[i]);
-        if (el) { el.click(); return 'clicked: ' + selectors[i]; }
+        if (el) return el;
       }
-      // 如果退出按钮在菜单里，可能需要先点击头像展开菜单
-      var avatar = document.querySelector('.user-name, .header-user, .user-info, [class*="avatar"], [class*="user"]');
-      if (avatar) { avatar.click(); }
-      return 'avatar_clicked';
+      return null;
     }
-    return tryClickLogout();
+    // 1. 尝试直接点击"退出登录"（Vue 事件监听器不依赖 CSS 可见性）
+    var logoutItem = findLogoutItem();
+    if (logoutItem) {
+      // 强制 popover 可见，以防 Vue 检查可见性
+      var popover = logoutItem.closest('.yk-popover');
+      if (popover) popover.style.setProperty('display', 'block', 'important');
+      logoutItem.click();
+      return 'clicked_logout';
+    }
+    // 2. 尝试点击头像展开 popover，下次重试时再点击退出
+    var avatar = findAvatarTrigger();
+    if (avatar) { avatar.click(); return 'avatar_clicked'; }
+    return 'not_found';
   })();
 `;
 
@@ -655,6 +680,21 @@ function createLogoutWindow(cookieJson) {
         finish({ success: true });
       }
     });
+    // SPA 内部导航也可能跳到登录页
+    logoutWindow.webContents.on("did-navigate-in-page", (_e, url) => {
+      console.debug(`登出：页面内导航到 ${url}`);
+      if (url.includes("photo.baidu.com/photo/web/login")) {
+        console.debug("登出：SPA 内导航到登录页，登出成功");
+        finish({ success: true });
+      }
+    });
+    // BDUSS cookie 被移除 = 登出成功（对齐 Python 版检测逻辑）
+    ses.cookies.on("changed", (_e, cookie, cause, removed) => {
+      if (cookie.name === "BDUSS" && removed) {
+        console.debug("登出：BDUSS cookie 已被移除，登出成功");
+        finish({ success: true });
+      }
+    });
 
     logoutWindow.webContents.on("did-finish-load", () => {
       const url = logoutWindow.webContents.getURL();
@@ -673,19 +713,21 @@ function createLogoutWindow(cookieJson) {
 
     function tryClickLogout() {
       if (resolved || !logoutWindow || logoutWindow.isDestroyed()) return;
-      if (clickAttempts >= 10) {
+      if (clickAttempts >= 15) {
         console.warn("登出：点击退出按钮尝试已达上限");
         return;
       }
       clickAttempts++;
       logoutWindow.webContents.executeJavaScript(LOGOUT_CLICK_JS).then((result) => {
-        console.debug(`登出：第 ${clickAttempts} 次尝试点击退出按钮 → ${result}`);
-        if (result && result.startsWith("clicked")) {
-          // 点击成功，等待页面跳转
-          console.debug("登出：已点击退出按钮，等待页面跳转");
+        console.debug(`登出：第 ${clickAttempts} 次尝试 → ${result}`);
+        if (result === "clicked_logout") {
+          // 已点击退出登录，3 秒后若无导航则重试（可能点击未生效）
+          clickRetryTimer = setTimeout(tryClickLogout, 3000);
+        } else if (result === "avatar_clicked") {
+          // 已点击头像展开 popover，800ms 后重试点击退出
+          clickRetryTimer = setTimeout(tryClickLogout, 800);
         } else {
-          // 可能点了头像但菜单没展开，稍后重试
-          console.debug(`登出：未找到退出按钮，2 秒后重试`);
+          // 未找到任何元素，2 秒后重试（Vue 可能还在渲染）
           clickRetryTimer = setTimeout(tryClickLogout, 2000);
         }
       }).catch((err) => {
