@@ -392,14 +392,14 @@ function createQRLoginWindow() {
   let submitted = false;       // 是否已提交候选 cookie
   let cookieCheckTimer = null; // cookie 轮询定时器
 
-  // 在 QR 窗口中注入 loading 遮罩（参照 Python 版 _create_loading_overlay / _set_loading）
-  // 遮罩在 BDUSS 出现时即时创建+显示，不依赖提前注入
+  // 在 QR 窗口中注入 loading 遮罩 DOM（参照 Python 版 _create_loading_overlay）
+  // 遮罩初始隐藏，只在提交候选 cookie 验证时显示（参照 Python _set_loading(True)）
   const OVERLAY_JS = `
     (function() {
       if (document.getElementById('yike-login-overlay')) return;
       var overlay = document.createElement('div');
       overlay.id = 'yike-login-overlay';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:999999;display:none;align-items:center;justify-content:center;flex-direction:column;font-family:"Microsoft YaHei","Segoe UI",sans-serif;';
       var title = document.createElement('div');
       title.textContent = '正在登录，请稍候';
       title.style.cssText = 'font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';
@@ -414,29 +414,17 @@ function createQRLoginWindow() {
       overlay.appendChild(title);
       overlay.appendChild(hint);
       overlay.appendChild(spinner);
-      document.documentElement ? document.documentElement.appendChild(overlay) : document.body.appendChild(overlay);
+      document.body.appendChild(overlay);
     })();
   `;
-  // dom-ready 时预注入遮罩 DOM（display:flex），但用 CSS 隐藏 body 内容
   qrWindow.webContents.on("dom-ready", () => {
     qrWindow.webContents.executeJavaScript(OVERLAY_JS).catch(() => {});
   });
 
   function showQROverlay() {
     if (qrWindow && !qrWindow.isDestroyed()) {
-      // 即时注入+显示遮罩，不依赖预注入的 DOM
       qrWindow.webContents.executeJavaScript(
-        "(function(){" +
-        "if(!document.getElementById('yike-login-overlay')){" +
-        "var o=document.createElement('div');o.id='yike-login-overlay';" +
-        "o.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:#fff;z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;';" +
-        "var t=document.createElement('div');t.textContent='正在登录，请稍候';t.style.cssText='font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;';" +
-        "var h=document.createElement('div');h.textContent='正在验证一刻相册访问权限，请勿关闭窗口。';h.style.cssText='font-size:14px;color:#718096;margin-bottom:24px;';" +
-        "var s=document.createElement('div');s.style.cssText='width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;';" +
-        "var st=document.createElement('style');st.textContent='@keyframes yike-spin{to{transform:rotate(360deg)}}';" +
-        "o.appendChild(st);o.appendChild(t);o.appendChild(h);o.appendChild(s);" +
-        "(document.documentElement||document.body).appendChild(o);}" +
-        "})();"
+        "var o=document.getElementById('yike-login-overlay');if(o){o.style.display='flex';}"
       ).catch(() => {});
     }
   }
@@ -465,10 +453,9 @@ function createQRLoginWindow() {
       const hasRequired = REQUIRED_COOKIES.every((n) => cookieMap[n]);
       if (!hasRequired) return;
 
-      // 记录 BDUSS 首次出现时间，并立即盖住页面
+      // 记录 BDUSS 首次出现时间（不显示遮罩，让用户继续看到二维码页面）
       if (cookieMap["BDUSS"] && bdussSeenAt === 0) {
         bdussSeenAt = Date.now();
-        showQROverlay();
       }
 
       const hasConfirmed = CONFIRMED_COOKIES.some((n) => cookieMap[n]);
@@ -550,7 +537,6 @@ function createQRLoginWindow() {
           if (!hasRequired) return;
           if (cookieMap["BDUSS"] && bdussSeenAt === 0) {
             bdussSeenAt = Date.now();
-            showQROverlay();
           }
           const hasConfirmed = CONFIRMED_COOKIES.some((n) => cookieMap[n]);
           const now = Date.now();
