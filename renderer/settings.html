@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高级同步设置</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div id="settings-app">
+    <!-- Left navigation -->
+    <nav id="settings-nav">
+      <div class="nav-section">
+        <div class="nav-item active" data-page="sync">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7l3-3 3 3M7 4v8M16 13l-3 3-3-3M13 16V8"/></svg>
+          <span>同步</span>
+        </div>
+        <div class="nav-item" data-page="transfer">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 4l-4 4 4 4M3 8h10M13 16l4-4-4-4M17 12H7"/></svg>
+          <span>传输</span>
+        </div>
+        <div class="nav-item" data-page="video">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M10 9v2M8 8l4 2-4 2v-4z" fill="currentColor" stroke="none"/></svg>
+          <span>视频</span>
+        </div>
+        <div class="nav-item" data-page="advanced">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="2.5"/><path d="M10 2v3M10 15v3M2 10h3M15 10h3M4.5 4.5l2 2M13.5 13.5l2 2M15.5 4.5l-2 2M6.5 13.5l-2 2"/></svg>
+          <span>高级</span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Page content -->
+    <div id="settings-content">
+      <!-- Page: Sync -->
+      <section class="page active" id="page-sync">
+        <h2 class="page-title">同步</h2>
+        <div class="form-grid">
+          <div class="form-row">
+            <label class="form-label">同步方向</label>
+            <select id="direction" class="form-select"></select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">相册处理顺序</label>
+            <select id="sort_field" class="form-select"></select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">排序</label>
+            <select id="reverse" class="form-select">
+              <option value="false">正序</option>
+              <option value="true">逆序</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">文件对比模式</label>
+            <select id="file_compare_mode" class="form-select" title="智能（推荐）会识别同名压缩视频和异名同内容副本；仅按文件名适合纯镜像；内容优先会标记同名但内容不同的非视频冲突。"></select>
+          </div>
+          <div class="form-row full">
+            <label class="form-checkbox">
+              <input type="checkbox" id="deletion">
+              <span>启用同步删除（危险，默认关闭）</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Page: Transfer -->
+      <section class="page" id="page-transfer">
+        <h2 class="page-title">传输</h2>
+        <div class="form-grid">
+          <div class="form-row full">
+            <label class="form-checkbox">
+              <input type="checkbox" id="skip_oversize">
+              <span>跳过超过普通用户大小限制的文件（照片/视频均 30MB）</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="form-label">文件上传并发</label>
+            <input type="number" id="file_client_workers" class="form-input" min="1" max="10" value="4" title="同步和手动上传可同时使用的单文件客户端数（1-10）。大于等于 16MB 的上传会自动独占上行链路。">
+          </div>
+          <div class="form-row">
+            <label class="form-label">文件下载并发</label>
+            <input type="number" id="download_client_workers" class="form-input" min="1" max="10" value="4" title="手动下载和同步下载可同时使用的独立客户端数（1-10）。遇到限流可调小。">
+          </div>
+          <div class="form-row">
+            <label class="form-label">相册读取并发</label>
+            <input type="number" id="list_threads" class="form-input" min="1" max="16" value="8" title="生成计划时并行读取云端相册媒体的线程数（1-16）。默认 8；如遇限流可调小。">
+          </div>
+          <div class="form-section">
+            <h3 class="section-title">下载缓存</h3>
+            <div class="form-row">
+              <label class="form-label">缓存上限</label>
+              <input type="number" id="download_cache_mib" class="form-input" min="64" max="102400" step="128" value="1024" title="已下载或已预览的云端文件会保存在当前系统用户的应用数据目录。超过上限后，最久未使用的缓存会自动清理。">
+              <span class="form-suffix">MiB</span>
+            </div>
+            <div class="form-row">
+              <span id="cacheUsage" class="form-hint">正在读取缓存占用…</span>
+            </div>
+            <div class="form-row">
+              <button id="btnClearCache" class="btn-secondary">清理下载缓存</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Page: Video -->
+      <section class="page" id="page-video">
+        <h2 class="page-title">视频</h2>
+        <div class="form-grid">
+          <div class="form-row full">
+            <label class="form-checkbox">
+              <input type="checkbox" id="compress_oversize_videos">
+              <span>压缩视频到30M以内</span>
+            </label>
+          </div>
+          <p class="form-note">免费用户单个视频不能超过30M，如果视频上传失败可开启，但会影响视频画质。</p>
+          <div id="ffmpegSection" class="form-section" style="display:none">
+            <h3 class="section-title">FFmpeg 组件</h3>
+            <div class="form-row">
+              <span id="ffmpegStatus" class="form-hint">正在检测 FFmpeg…</span>
+            </div>
+            <div class="form-row">
+              <button id="btnDownloadFFmpeg" class="btn-secondary" style="display:none">下载 FFmpeg</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Page: Advanced -->
+      <section class="page" id="page-advanced">
+        <h2 class="page-title">高级</h2>
+        <div class="form-grid">
+          <div class="form-row full">
+            <label class="form-checkbox">
+              <input type="checkbox" id="debug_logging">
+              <span>写入 DEBUG 日志</span>
+            </label>
+          </div>
+          <div class="form-row full">
+            <label class="form-checkbox">
+              <input type="checkbox" id="enhanced_keepalive">
+              <span>账号增强防掉线</span>
+            </label>
+            <p class="form-note">启用后每 3 分钟刷新一次隐藏窗口；默认关闭，由网页自身 JavaScript 维持会话。</p>
+          </div>
+          <div class="form-row full">
+            <p class="form-note">提示：在同步中心左侧相册列表上点击右键，可将相册加入或移出忽略列表。</p>
+          </div>
+          <div class="form-row full">
+            <button id="btnResetApp" class="btn-danger">重置应用（清除本机全部数据）</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Bottom buttons -->
+    <div id="settings-footer">
+      <button id="btnCancel" class="btn-secondary">取消</button>
+      <button id="btnSave" class="btn-primary">确定</button>
+    </div>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

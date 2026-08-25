@@ -1,0 +1,68 @@
+"use strict";
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("api", {
+  // Bridge RPC call
+  call: (method, params) => ipcRenderer.invoke("bridge:call", method, params),
+
+  // QR login
+  openQRLogin: () => ipcRenderer.invoke("qr-login:open"),
+  onQRLoginCookie: (callback) => {
+    ipcRenderer.on("qr-login-cookie", (_e, cookieJson) => callback(cookieJson));
+  },
+  onQRLoginClosed: (callback) => {
+    ipcRenderer.on("qr-login-closed", () => callback());
+  },
+  closeQRLogin: () => ipcRenderer.send("qr-login:close"),
+  retryQRLogin: () => ipcRenderer.send("qr-login:retry"),
+
+  // Bridge event listeners (progress/status/alert)
+  onProgress: (callback) => {
+    ipcRenderer.on("bridge:progress", (_e, value, text) => callback(value, text));
+  },
+  onStatus: (callback) => {
+    ipcRenderer.on("bridge:status", (_e, seq, text) => callback(seq, text));
+  },
+  onAlert: (callback) => {
+    ipcRenderer.on("bridge:alert", (_e, message) => callback(message));
+  },
+
+  // Execute plan async completion / error
+  onExecuteComplete: (callback) => {
+    ipcRenderer.on("bridge:execute-complete", (_e, actions) => callback(actions));
+  },
+  onExecuteError: (callback) => {
+    ipcRenderer.on("bridge:execute-error", (_e, message) => callback(message));
+  },
+
+  // Dialogs
+  openDirectory: () => ipcRenderer.invoke("dialog:openDirectory"),
+  openFiles: () => ipcRenderer.invoke("dialog:openFiles"),
+
+  // Shell
+  openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),
+
+  // Clipboard
+  readClipboardText: () => ipcRenderer.invoke("clipboard:readText"),
+
+  // App
+  quit: () => ipcRenderer.invoke("app:quit"),
+  platform: process.platform,
+  onCloseRequested: (callback) => {
+    ipcRenderer.on("app-close-requested", () => callback());
+  },
+
+  // Settings window
+  openSettings: () => ipcRenderer.invoke("settings:open"),
+  notifySettingsSaved: (settings) => ipcRenderer.send("settings:saved-notify", settings),
+  onSettingsSaved: (callback) => {
+    ipcRenderer.on("settings-saved", (_e, settings) => callback(settings));
+  },
+
+  // Sync result window
+  openSyncResult: (data) => ipcRenderer.invoke("sync-result:open", data),
+  onSyncResultData: (callback) => {
+    ipcRenderer.on("sync-result:data", (_e, data) => callback(data));
+  },
+});

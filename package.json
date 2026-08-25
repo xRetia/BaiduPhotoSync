@@ -1,0 +1,16 @@
+{
+  "name": "baiduphotosync-electron",
+  "version": "1.0.0",
+  "description": "一刻相册同步助手 - Electron 版",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

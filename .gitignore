@@ -1,0 +1,19 @@
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Electron build output
+out/
+dist/
+
+# Temp
+.temp/
+
+# Editor and operating-system files
+*.swp
+.DS_Store
+.vscode/
+.idea/
+
+# Runtime logs
+*.log
