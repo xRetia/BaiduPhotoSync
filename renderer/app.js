@@ -13,6 +13,9 @@ const state = {
   currentMedia: [],
   syncActions: [],
   syncMode: "idle",
+  syncStatusText: "尚未比较",
+  syncLiveText: "同步未运行",
+  currentTab: "browser",
   syncFinishedSequences: new Set(),
   syncExecutableTotal: 0,
   syncStartedAt: null,
@@ -92,6 +95,17 @@ function showPrompt(message, defaultValue = "") {
 // persistentStatus 保存稳态文案（登录状态、加载结果等），
 // 进度进行中时左侧状态栏会临时显示实时操作，结束后恢复稳态文案。
 let persistentStatus = "就绪";
+
+// 同步状态写入底部状态栏（仅在同步中心 tab 时生效）
+function setSyncStatus() {
+  if (state.currentTab !== "sync") return;
+  const live = state.syncLiveText;
+  if (live === "同步已暂停" || live === "正在安全停止" || live.startsWith("同步失败")) {
+    setStatus(live);
+  } else {
+    setStatus(state.syncStatusText);
+  }
+}
 
 function setStatus(text) {
   persistentStatus = text;
@@ -180,6 +194,9 @@ document.querySelectorAll(".nav-item").forEach(item => {
     item.classList.add("active");
     $("tab-" + item.dataset.tab).classList.add("active");
     $("pageTitle").textContent = PAGE_TITLES[item.dataset.tab] || "";
+    state.currentTab = item.dataset.tab;
+    if (item.dataset.tab === "sync") setSyncStatus();
+    else setStatus("就绪");
   });
 });
 
@@ -216,12 +233,13 @@ function setSyncControls(mode) {
   $("btnAlbumRefresh").disabled = !(connected && !active);
   $("btnRefresh").disabled = !(connected && !active);
 
-  const label = $("syncLiveLabel");
-  if (mode === "running") label.textContent = "同步进行中";
-  else if (mode === "paused") label.textContent = "同步已暂停";
-  else if (mode === "stopping") label.textContent = "正在安全停止";
-  else if (!connected) label.textContent = "同步未运行";
-  else label.textContent = "同步待命";
+  const liveText = mode === "running" ? "同步进行中"
+    : mode === "paused" ? "同步已暂停"
+    : mode === "stopping" ? "正在安全停止"
+    : !connected ? "同步未运行"
+    : "同步待命";
+  state.syncLiveText = liveText;
+  setSyncStatus();
 }
 
 // === Login ===
@@ -769,7 +787,8 @@ $("btnBuildPlan").addEventListener("click", async () => {
     const conflicts = actions.filter(a => a.action === "冲突").length;
     const executable = actions.filter(a => a.can_execute).length;
     const ignored = actions.filter(a => a.action === "跳过" && a.detail && a.detail.includes("忽略")).length;
-    $("planSummary").textContent = `共 ${count} 项；可执行 ${executable} 项；冲突 ${conflicts} 项；已忽略 ${ignored} 项`;
+    state.syncStatusText = `共 ${count} 项；可执行 ${executable} 项；冲突 ${conflicts} 项；已忽略 ${ignored} 项`;
+    setSyncStatus();
     setProgress(100, `计划已生成：${executable} 项待执行`);
     setSyncControls("idle");
   } catch (err) { setProgress(0, "操作失败"); setSyncControls("idle"); toast("生成同步计划失败: " + err.message, "error", 5000); }
@@ -779,7 +798,7 @@ function populatePlanTable(actions) {
   const body = $("planTableBody");
   body.innerHTML = "";
   state.syncRowsBySequence = {};
-  const visibleActions = actions.filter(a => a.action !== "跳过" || (a.detail && a.detail.includes("非有效照片/视频")));
+  const visibleActions = actions.filter(a => a.action !== "无需操作");
   visibleActions.forEach(action => {
     const row = body.insertRow();
     state.syncRowsBySequence[action.sequence] = row.rowIndex - 1;
@@ -893,7 +912,8 @@ $("btnExecutePlan").addEventListener("click", async () => {
     if (!result || !result.started) throw new Error("无法启动同步执行。");
   } catch (err) {
     setProgress(0, "同步执行失败");
-    $("syncLiveLabel").textContent = "同步失败：请查看 error.log";
+    state.syncLiveText = "同步失败：请查看 error.log";
+    setSyncStatus();
     setSyncControls("idle");
     toast("同步执行失败: " + err.message, "error", 5000);
   }
@@ -903,7 +923,8 @@ window.api.onExecuteComplete((actions) => { onSyncComplete(actions); });
 
 window.api.onExecuteError((message) => {
   setProgress(0, "同步执行失败");
-  $("syncLiveLabel").textContent = "同步失败：请查看 error.log";
+  state.syncLiveText = "同步失败：请查看 error.log";
+  setSyncStatus();
   setSyncControls("idle");
   toast("同步执行失败: " + message, "error", 5000);
 });
@@ -947,8 +968,8 @@ function updateSyncActionStatus(sequence, status) {
   }
   if (["已完成","已停止"].includes(status) || status.startsWith("失败") || status.startsWith("错误") || status.startsWith("已跳过")) state.syncFinishedSequences.add(sequence);
   else state.syncFinishedSequences.delete(sequence);
-  $("planSummary").textContent = `同步中：已处理 ${state.syncFinishedSequences.size}/${state.syncExecutableTotal} 项`;
-  $("syncLiveLabel").textContent = `当前：${action.album_name} / ${action.media_name || action.action}`;
+  state.syncStatusText = `同步中：已处理 ${state.syncFinishedSequences.size}/${state.syncExecutableTotal} 项`;
+  setSyncStatus();
 }
 
 function onSyncComplete(actions) {
@@ -962,7 +983,8 @@ function onSyncComplete(actions) {
   if (failures) parts.push(`${failures} 项失败`);
   if (skipped) parts.push(`${skipped} 项已跳过`);
   if (stopped) parts.push(`${stopped} 项已停止`);
-  $("planSummary").textContent = parts.length > 0 ? "同步结束：" + parts.join("；") : "同步执行完成";
+  state.syncStatusText = parts.length > 0 ? "同步结束：" + parts.join("；") : "同步执行完成";
+  setSyncStatus();
   setProgress(100, "同步执行完成");
   setSyncControls("idle");
   showSyncResult(actions);
@@ -1023,7 +1045,8 @@ async function logout() {
     $("albumTree").innerHTML = ""; $("mediaTableBody").innerHTML = ""; $("thumbnailGrid").innerHTML = "";
     $("planTableBody").innerHTML = ""; $("syncAlbumTree").innerHTML = "";
     $("mediaTitle").textContent = "选择一个相册以浏览媒体";
-    $("planSummary").textContent = "尚未比较";
+    state.syncStatusText = "尚未比较";
+    setSyncStatus();
     hideLogoutLoading();
     setStatus("已退出登录，请重新扫码登录。");
     state.loginFromSplash = false;

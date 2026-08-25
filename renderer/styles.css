@@ -538,16 +538,6 @@ body {
   margin: 0 4px;
 }
 
-.sync-info-bar {
-  display: flex;
-  gap: 16px;
-  margin-left: auto;
-  align-items: center;
-}
-
-.info-text { font-size: 12px; color: var(--ink-2); font-weight: 500; }
-.info-text.muted { color: var(--ink-3); font-weight: 400; }
-
 .sync-split-view {
   flex: 1;
   display: flex;
@@ -578,10 +568,10 @@ body {
   overflow: auto;
 }
 
-/* 同步计划表：默认占满宽度且文字不折行；空间不足时才横向滚动 */
+/* 同步计划表：比例宽度自适应窗口，文字不折行 */
 .table-scroll .data-table {
   table-layout: fixed;
-  min-width: 920px;
+  width: 100%;
 }
 
 .table-scroll .data-table th,
