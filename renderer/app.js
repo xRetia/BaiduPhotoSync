@@ -867,7 +867,8 @@ async function logout() {
     const result = await window.api.startLogout();
     if (!result.success) {
       hideLogoutLoading();
-      toast("登出超时，未检测到会话失效，本机登录信息仍保留。", "warning");
+      const msgs = { timeout: "登出超时，未检测到会话失效。", no_bduss: "无法注入登录凭证，登出失败。", no_client: "未找到活跃会话。" };
+      toast((result.reason && msgs[result.reason]) || "登出失败，本机登录信息仍保留。", "warning");
       return;
     }
     await bridge("clear_session");

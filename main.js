@@ -581,6 +581,7 @@ function createQRLoginWindow() {
 
 const LOGOUT_URL = "https://passport.baidu.com/?logout&u=https%3A%2F%2Fphoto.baidu.com%2Fphoto%2Fweb%2Falbum";
 const LOGOUT_HOME_URL = "https://photo.baidu.com/";
+const LOGOUT_PASSPORT_URL = "https://passport.baidu.com/";
 const LOGOUT_TIMEOUT_MS = 30 * 1000; // 30 秒超时
 
 function createLogoutWindow(cookieJson) {
@@ -603,16 +604,12 @@ function createLogoutWindow(cookieJson) {
     });
 
     const ses = logoutWindow.webContents.session;
-    let logoutCheckTimer = null;
     let logoutTimeoutTimer = null;
     let resolved = false;
-    let pageLoaded = false;
-    let initialBdussFound = false;
 
     function finish(result) {
       if (resolved) return;
       resolved = true;
-      if (logoutCheckTimer) { clearInterval(logoutCheckTimer); logoutCheckTimer = null; }
       if (logoutTimeoutTimer) { clearTimeout(logoutTimeoutTimer); logoutTimeoutTimer = null; }
       if (logoutWindow && !logoutWindow.isDestroyed()) {
         logoutWindow.destroy();
@@ -622,49 +619,30 @@ function createLogoutWindow(cookieJson) {
       resolve(result);
     }
 
-    // 监听页面加载完成
+    // 监听导航：登出流程 passport.baidu.com → 302 → photo.baidu.com/album → 302 → photo.baidu.com/login
+    // 检测最终 URL 是否跳到登录页来判断登出成功
+    logoutWindow.webContents.on("did-navigate", (_e, url) => {
+      console.debug(`登出：页面导航到 ${url}`);
+      if (url.includes("photo.baidu.com/photo/web/login")) {
+        console.debug("登出：已跳转到登录页，登出成功");
+        finish({ success: true });
+      }
+    });
+
     logoutWindow.webContents.on("did-finish-load", () => {
-      pageLoaded = true;
-      console.debug("登出：页面加载完成，开始检测 cookie 状态");
-      // 加载完成后立即检查一次
-      checkBduss();
+      const url = logoutWindow.webContents.getURL();
+      console.debug(`登出：页面加载完成，当前 URL=${url}`);
+      if (url.includes("photo.baidu.com/photo/web/login")) {
+        finish({ success: true });
+      }
     });
 
     logoutWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
       console.warn(`登出：页面加载失败 ${errorCode} ${errorDescription}`);
     });
 
-    logoutWindow.webContents.on("did-navigate", (_e, url) => {
-      console.debug(`登出：页面导航到 ${url}`);
-    });
-
-    function checkBduss() {
-      ses.cookies.get({}).then((cookies) => {
-        const bduss = cookies.find(
-          (c) => c.name === "BDUSS" && c.domain && c.domain.includes("baidu.com")
-        );
-        if (!initialBdussFound) {
-          if (bduss) {
-            initialBdussFound = true;
-            console.debug("登出：初始 BDUSS cookie 已确认存在");
-          } else if (pageLoaded) {
-            // 页面已加载完但仍无 BDUSS，可能 cookie 注入失败或登出已完成
-            console.debug("登出：页面加载后未找到 BDUSS");
-            finish({ success: true });
-            return;
-          }
-        }
-        if (initialBdussFound && !bduss) {
-          console.debug("登出：BDUSS cookie 已消失，退出成功");
-          finish({ success: true });
-        }
-      }).catch((err) => {
-        console.warn("登出：检查 cookie 出错:", err.message || err);
-      });
-    }
-
     async function startLogout() {
-      // 注入当前 cookie
+      // 注入当前 cookie 到所有相关域名
       try {
         const cookies = JSON.parse(cookieJson);
         console.debug(`登出：解析到 ${cookies.length} 个 cookie`);
@@ -673,17 +651,21 @@ function createLogoutWindow(cookieJson) {
           if (!c.name || !c.value) continue;
           const domain = c.domain || ".baidu.com";
           if (!isBaiduDomain(domain)) continue;
-          setPromises.push(
-            ses.cookies.set({
-              name: c.name,
-              value: c.value,
-              domain: domain.startsWith(".") ? domain : "." + domain,
-              path: c.path || "/",
-              url: LOGOUT_HOME_URL,
-              secure: c.secure != null ? c.secure : false,
-              httpOnly: c.httpOnly != null ? c.httpOnly : false,
-            }).catch(() => {})
-          );
+          const normalizedDomain = domain.startsWith(".") ? domain : "." + domain;
+          // cookie 需要同时关联到 photo.baidu.com 和 passport.baidu.com
+          for (const url of [LOGOUT_HOME_URL, LOGOUT_PASSPORT_URL]) {
+            setPromises.push(
+              ses.cookies.set({
+                name: c.name,
+                value: c.value,
+                domain: normalizedDomain,
+                path: c.path || "/",
+                url: url,
+                secure: c.secure != null ? c.secure : false,
+                httpOnly: c.httpOnly != null ? c.httpOnly : false,
+              }).catch(() => {})
+            );
+          }
         }
         await Promise.all(setPromises);
         console.debug("登出：cookie 注入完成");
@@ -701,19 +683,15 @@ function createLogoutWindow(cookieJson) {
         finish({ success: false, reason: "no_bduss" });
         return;
       }
-      initialBdussFound = true;
       console.debug("登出：BDUSS cookie 已确认注入");
 
       // 访问登出 URL
       console.debug(`登出：加载 ${LOGOUT_URL}`);
       logoutWindow.loadURL(LOGOUT_URL);
 
-      // 轮询检测 BDUSS cookie 是否消失（页面加载后开始生效）
-      logoutCheckTimer = setInterval(checkBduss, 1000);
-
       // 30 秒超时
       logoutTimeoutTimer = setTimeout(() => {
-        console.warn("登出：超时，BDUSS 仍然存在");
+        console.warn("登出：超时，未跳转到登录页");
         finish({ success: false, reason: "timeout" });
       }, LOGOUT_TIMEOUT_MS);
     }
