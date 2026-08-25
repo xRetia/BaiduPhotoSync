@@ -409,6 +409,7 @@ function createQRLoginWindow() {
   </body></html>`;
 
   let loadingWindow = null;
+  let navigateHidden = false; // qrWindow 是否因页面跳转而隐藏
 
   function showLoading() {
     if (loadingWindow && !loadingWindow.isDestroyed()) {
@@ -442,16 +443,26 @@ function createQRLoginWindow() {
     }
   }
 
+  // 页面跳转时立即隐藏 qrWindow，显示 loading，后台 webview 继续提取 cookie
+  function onLoginNavigated() {
+    if (navigateHidden) return;
+    navigateHidden = true;
+    if (qrWindow && !qrWindow.isDestroyed()) {
+      qrWindow.hide();
+    }
+    showLoading();
+  }
+
   // qrWindow 移动/缩放时同步 loading 窗口
   qrWindow.on("move", () => {
-    if (loadingWindow && !loadingWindow.isDestroyed()) {
+    if (loadingWindow && !loadingWindow.isDestroyed() && loadingWindow.isVisible()) {
       const [x, y] = qrWindow.getPosition();
       const [w, h] = qrWindow.getSize();
       loadingWindow.setBounds({ x, y, width: w, height: h });
     }
   });
   qrWindow.on("resize", () => {
-    if (loadingWindow && !loadingWindow.isDestroyed()) {
+    if (loadingWindow && !loadingWindow.isDestroyed() && loadingWindow.isVisible()) {
       const [x, y] = qrWindow.getPosition();
       const [w, h] = qrWindow.getSize();
       loadingWindow.setBounds({ x, y, width: w, height: h });
@@ -461,6 +472,23 @@ function createQRLoginWindow() {
   // 每次页面 dom-ready 时都注入 CSS（页面跳转后 DOM 重建需重新注入）
   qrWindow.webContents.on("dom-ready", () => {
     qrWindow.webContents.insertCSS(LOGIN_HIDE_CSS).catch(() => {});
+  });
+
+  // 页面跳转时立即隐藏 qrWindow，显示 loading，后台继续提取 cookie
+  qrWindow.webContents.on("will-navigate", (_e, url) => {
+    console.debug(`登录：页面即将跳转 → ${url}`);
+    onLoginNavigated();
+  });
+  qrWindow.webContents.on("did-navigate", (_e, url) => {
+    console.debug(`登录：页面已跳转 → ${url}`);
+    onLoginNavigated();
+  });
+  qrWindow.webContents.on("did-navigate-in-page", (_e, url) => {
+    // SPA 内部跳转也可能是登录成功后的路由变化
+    if (url.includes("photo.baidu.com/photo/web/") && !url.includes("/login")) {
+      console.debug(`登录：SPA 内部跳转 → ${url}`);
+      onLoginNavigated();
+    }
   });
 
   const ses = qrWindow.webContents.session;
@@ -521,19 +549,20 @@ function createQRLoginWindow() {
     clearInterval(cookieCheckTimer);
     cookieCheckTimer = null;
 
-    // 先提取 cookie，再显示 loading（避免 loading 窗口干扰 webContents）
+    // 确保已隐藏 qrWindow 并显示 loading
+    onLoginNavigated();
+
+    // 后台提取 cookie（qrWindow 虽隐藏但 webContents 仍在运行）
     ses.cookies.get({}).then((cookies) => {
       const cookieJson = JSON.stringify(
         cookies
           .filter((c) => c.domain && c.domain.includes("baidu.com"))
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain }))
       );
-      // 提取完成后再显示 loading 窗口盖住 webview
-      showLoading();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("qr-login-cookie", cookieJson);
       }
-      // 不立即关闭 QR 窗口，等渲染进程验证成功后再关闭
+      // 不关闭 qrWindow，等渲染进程验证成功后再关闭
     }).catch(() => {
       submitted = false; // 允许重试
     });
@@ -543,8 +572,10 @@ function createQRLoginWindow() {
   ipcMain.once("qr-login:close", () => {
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
     if (cookieCheckTimer) { clearInterval(cookieCheckTimer); cookieCheckTimer = null; }
+    if (loadingWindow && !loadingWindow.isDestroyed()) { loadingWindow.destroy(); }
+    loadingWindow = null;
     if (qrWindow && !qrWindow.isDestroyed()) {
-      qrWindow.close();
+      qrWindow.destroy();
     }
   });
 
@@ -553,8 +584,15 @@ function createQRLoginWindow() {
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
     submitted = false;
     bdussSeenAt = 0;
-    // 隐藏 loading 窗口，让用户可以重新扫码
+    navigateHidden = false;
+    // 隐藏 loading，重新显示 qrWindow 让用户扫码
     hideLoading();
+    if (qrWindow && !qrWindow.isDestroyed()) {
+      qrWindow.show();
+      qrWindow.focus();
+      // 重新加载登录页
+      qrWindow.loadURL(loginUrl);
+    }
     if (!cookieCheckTimer && qrWindow && !qrWindow.isDestroyed()) {
       cookieCheckTimer = setInterval(() => {
         if (!qrWindow || qrWindow.isDestroyed()) {
