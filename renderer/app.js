@@ -192,28 +192,63 @@ function openQRLogin() {
 
 window.api.onQRLoginCookie(async (cookieJson) => {
   setStatus("正在验证一刻相册登录会话…");
-  showLoading("正在验证扫码会话…");
-  setLoadingStage(70, "正在验证扫码会话…");
-  setProgress(15, "正在解析扫码会话");
+  showLoginLoading();
   try {
     await bridge("connect", { cookie_text: cookieJson, save: true });
-    setProgress(100, "登录验证成功");
-    setLoadingStage(100, "登录成功");
+    hideLoginLoading();
     window.api.closeQRLogin();
     onConnected(cookieJson, true);
   } catch (err) {
-    hideLoading();
-    setProgress(0, "就绪");
+    hideLoginLoading();
     setStatus("登录会话验证失败，正在等待重试…");
     toast("登录验证失败，正在自动重试…", "error", 5000);
     window.api.retryQRLogin();
   }
 });
 
+window.api.onQRLoginLoading(() => {
+  showLoginLoading();
+});
+
+window.api.onQRLoginLoadingHide(() => {
+  hideLoginLoading();
+});
+
 window.api.onQRLoginClosed(() => {
-  hideLoading();
+  hideLoginLoading();
   if (!state.connected) { setStatus("登录已取消。"); setProgress(0, "就绪"); }
 });
+
+// === Login loading overlay (样式对齐退出登录) ===
+function showLoginLoading() {
+  let overlay = document.getElementById("login-loading-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "login-loading-overlay";
+    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.95);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;font-family:Microsoft YaHei,sans-serif;";
+    const title = document.createElement("div");
+    title.textContent = "正在登录，请稍候";
+    title.style.cssText = "font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px;";
+    const hint = document.createElement("div");
+    hint.textContent = "正在验证一刻相册访问权限，请勿关闭窗口。";
+    hint.style.cssText = "font-size:14px;color:#718096;margin-bottom:24px;";
+    const spinner = document.createElement("div");
+    spinner.style.cssText = "width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite;";
+    const style = document.createElement("style");
+    style.textContent = "@keyframes yike-spin{to{transform:rotate(360deg)}}";
+    overlay.appendChild(style);
+    overlay.appendChild(title);
+    overlay.appendChild(hint);
+    overlay.appendChild(spinner);
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = "flex";
+}
+
+function hideLoginLoading() {
+  const overlay = document.getElementById("login-loading-overlay");
+  if (overlay) overlay.style.display = "none";
+}
 
 function onConnected(cookieText, saved) {
   state.connected = true;

@@ -394,81 +394,20 @@ function createQRLoginWindow() {
     }
   `;
 
-  // 独立 loading 窗口：盖在 qrWindow 上面，页面跳转不影响遮罩
-  // 样式对齐退出登录的 showLogoutLoading()
-  const loadingHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;background:rgba(255,255,255,0.95);font-family:"Microsoft YaHei","Segoe UI",sans-serif}
-    .title{font-size:22px;font-weight:700;color:#1d63bf;margin-bottom:12px}
-    .hint{font-size:14px;color:#718096;margin-bottom:24px}
-    .spinner{width:36px;height:36px;border:3px solid #e0e8f5;border-top-color:#2577d9;border-radius:50%;animation:yike-spin 0.8s linear infinite}
-    @keyframes yike-spin{to{transform:rotate(360deg)}}
-  </style></head><body>
-    <div class="title">正在登录，请稍候</div>
-    <div class="hint">正在验证一刻相册访问权限，请勿关闭窗口。</div>
-    <div class="spinner"></div>
-  </body></html>`;
-
-  let loadingWindow = null;
   let navigateHidden = false; // qrWindow 是否因页面跳转而隐藏
 
-  function showLoading() {
-    if (loadingWindow && !loadingWindow.isDestroyed()) {
-      const [x, y] = qrWindow.getPosition();
-      const [w, h] = qrWindow.getSize();
-      loadingWindow.setBounds({ x, y, width: w, height: h });
-      loadingWindow.show();
-      return;
-    }
-    const [x, y] = qrWindow.getPosition();
-    const [w, h] = qrWindow.getSize();
-    loadingWindow = new BrowserWindow({
-      x, y, width: w, height: h,
-      frame: false,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      focusable: false,
-      skipTaskbar: true,
-      show: true,
-      alwaysOnTop: true,
-      webPreferences: { contextIsolation: true, nodeIntegration: false },
-    });
-    loadingWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(loadingHTML));
-    loadingWindow.on("closed", () => { loadingWindow = null; });
-  }
-
-  function hideLoading() {
-    if (loadingWindow && !loadingWindow.isDestroyed()) {
-      loadingWindow.hide();
-    }
-  }
-
-  // 页面跳转时立即隐藏 qrWindow，显示 loading，后台 webview 继续提取 cookie
+  // 页面跳转时立即隐藏 qrWindow，通知主窗口显示 loading，后台 webview 继续提取 cookie
   function onLoginNavigated() {
     if (navigateHidden) return;
     navigateHidden = true;
     if (qrWindow && !qrWindow.isDestroyed()) {
       qrWindow.hide();
     }
-    showLoading();
+    // 通知主窗口渲染进程显示 loading overlay
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("qr-login-loading");
+    }
   }
-
-  // qrWindow 移动/缩放时同步 loading 窗口
-  qrWindow.on("move", () => {
-    if (loadingWindow && !loadingWindow.isDestroyed() && loadingWindow.isVisible()) {
-      const [x, y] = qrWindow.getPosition();
-      const [w, h] = qrWindow.getSize();
-      loadingWindow.setBounds({ x, y, width: w, height: h });
-    }
-  });
-  qrWindow.on("resize", () => {
-    if (loadingWindow && !loadingWindow.isDestroyed() && loadingWindow.isVisible()) {
-      const [x, y] = qrWindow.getPosition();
-      const [w, h] = qrWindow.getSize();
-      loadingWindow.setBounds({ x, y, width: w, height: h });
-    }
-  });
 
   // 每次页面 dom-ready 时都注入 CSS（页面跳转后 DOM 重建需重新注入）
   qrWindow.webContents.on("dom-ready", () => {
@@ -574,8 +513,6 @@ function createQRLoginWindow() {
   ipcMain.once("qr-login:close", () => {
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
     if (cookieCheckTimer) { clearInterval(cookieCheckTimer); cookieCheckTimer = null; }
-    if (loadingWindow && !loadingWindow.isDestroyed()) { loadingWindow.destroy(); }
-    loadingWindow = null;
     if (qrWindow && !qrWindow.isDestroyed()) {
       qrWindow.destroy();
     }
@@ -587,8 +524,10 @@ function createQRLoginWindow() {
     submitted = false;
     bdussSeenAt = 0;
     navigateHidden = false;
-    // 隐藏 loading，重新显示 qrWindow 让用户扫码
-    hideLoading();
+    // 通知主窗口隐藏 loading overlay
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("qr-login-loading-hide");
+    }
     if (qrWindow && !qrWindow.isDestroyed()) {
       qrWindow.show();
       qrWindow.focus();
@@ -634,8 +573,6 @@ function createQRLoginWindow() {
   qrWindow.on("closed", () => {
     if (cookieCheckTimer) { clearInterval(cookieCheckTimer); cookieCheckTimer = null; }
     if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
-    if (loadingWindow && !loadingWindow.isDestroyed()) { loadingWindow.destroy(); }
-    loadingWindow = null;
     qrWindow = null;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("qr-login-closed");

@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld("api", {
   },
   closeQRLogin: () => ipcRenderer.send("qr-login:close"),
   retryQRLogin: () => ipcRenderer.send("qr-login:retry"),
+  onQRLoginLoading: (callback) => {
+    ipcRenderer.on("qr-login-loading", () => callback());
+  },
+  onQRLoginLoadingHide: (callback) => {
+    ipcRenderer.on("qr-login-loading-hide", () => callback());
+  },
 
   // Logout
   startLogout: () => ipcRenderer.invoke("logout:start"),
