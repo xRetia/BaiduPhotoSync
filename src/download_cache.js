@@ -141,7 +141,7 @@ class DownloadCache {
         removed += entry.size;
         // Clean empty parent dirs
         let parent = path.dirname(entry.path);
-        while (parent !== this.root && fs.existsSync(parent)) {
+        while (path.resolve(parent) !== path.resolve(this.root) && fs.existsSync(parent)) {
           if (fs.readdirSync(parent).length > 0) break;
           fs.rmdirSync(parent);
           parent = path.dirname(parent);

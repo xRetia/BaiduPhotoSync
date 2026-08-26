@@ -91,7 +91,7 @@ async function waitWithControl(seconds, control) {
 }
 
 function nameKey(name) {
-  return path.basename(name).trim().toLowerCase();
+  return path.basename(name).trim().normalize("NFC").toLowerCase();
 }
 
 // ========== 枚举 ==========

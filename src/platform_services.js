@@ -7,37 +7,50 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { execSync } = require("child_process");
+const { execSync, spawn } = require("child_process");
 
 const APPLICATION_DIRECTORY_NAME = "BaiduPhotoSync";
 
-function app_data_directory() {
+/**
+ * 返回应用数据目录路径（不创建目录）。
+ * 供 migrate 等逻辑在创建目录之前检查路径用。
+ */
+function _appDataPath() {
   let base;
   if (process.platform === "win32") {
-    base = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"));
+    base = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   } else if (process.platform === "darwin") {
     base = path.join(os.homedir(), "Library", "Application Support");
   } else {
     base = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   }
-  const d = path.join(base, APPLICATION_DIRECTORY_NAME);
+  return path.join(base, APPLICATION_DIRECTORY_NAME);
+}
+
+function app_data_directory() {
+  const d = _appDataPath();
   fs.mkdirSync(d, { recursive: true });
   return d;
 }
 
 function open_system_viewer(filePath) {
   try {
-    const { exec } = require("child_process");
+    let proc;
     if (process.platform === "win32") {
-      exec(`start "" "${filePath}"`);
+      proc = spawn("cmd", ["/c", "start", "", filePath], { stdio: "ignore", shell: false });
     } else if (process.platform === "darwin") {
-      exec(`open "${filePath}"`);
+      proc = spawn("open", [filePath], { stdio: "ignore", shell: false });
     } else {
-      exec(`xdg-open "${filePath}"`);
+      proc = spawn("xdg-open", [filePath], { stdio: "ignore", shell: false });
     }
-    return true;
+    // 如果进程成功启动（无 error 事件），视为成功
+    return new Promise((resolve) => {
+      proc.on("error", () => resolve(false));
+      // 给进程 100ms 启动窗口，无 error 即认为启动成功
+      setTimeout(() => resolve(true), 100);
+    });
   } catch (err) {
-    return false;
+    return Promise.resolve(false);
   }
 }
 
@@ -75,7 +88,7 @@ function migrate_legacy_windows_data() {
     process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
     APPLICATION_DIRECTORY_NAME
   );
-  const current = app_data_directory();
+  const current = _appDataPath();   // 不创建目录，仅取路径
   if (legacy === current || !fs.existsSync(legacy) || fs.existsSync(current)) return;
   try {
     fs.mkdirSync(path.dirname(current), { recursive: true });

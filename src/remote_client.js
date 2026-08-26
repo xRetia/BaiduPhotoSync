@@ -736,6 +736,16 @@ class YikeRemoteClient {
     } catch (err) {
       throw new RemoteClientError("重命名相册失败。");
     }
+    // 回读确认：远端名称必须已更新（对齐 Python 版 getName() != title 校验）
+    try {
+      const detail = await this._api.getAlbum_ByID(String(albumId));
+      if (!detail || String(detail.title) !== title) {
+        throw new RemoteClientError("重命名相册后远端名称未更新。");
+      }
+    } catch (err) {
+      if (err instanceof RemoteClientError) throw err;
+      throw new RemoteClientError("重命名相册后无法确认远端名称。");
+    }
     // 就地更新缓存
     albumInfo.title = title;
     this._invalidateAlbumCache();
@@ -783,8 +793,13 @@ class YikeRemoteClient {
       if (!fsid) {
         throw new RemoteClientError(`上传未返回有效 FSID：${path.basename(filePath)}`);
       }
-      if (progress) progress(100, `上传完成，等待主控制器统一加入相册 ${path.basename(filePath)}`);
-      return fsid;
+      const alreadyExist = itemInfo._alreadyExist === true;
+      if (progress) {
+        progress(100, alreadyExist
+          ? `文件已存在于云端：${path.basename(filePath)}`
+          : `上传完成，等待主控制器统一加入相册 ${path.basename(filePath)}`);
+      }
+      return { fsid, alreadyExist };
     } catch (err) {
       if (err instanceof RemoteClientError) throw err;
       if (err instanceof TypeError || err instanceof ReferenceError) {
@@ -851,7 +866,7 @@ class YikeRemoteClient {
    * 单文件上传 + 关联（兼容路径，用于手动上传）。
    */
   async uploadFileOnce(albumId, filePath, progress = null) {
-    const fsid = await this.uploadFilePayloadOnce(filePath, null);
+    const { fsid } = await this.uploadFilePayloadOnce(filePath, progress);
     const confirmed = await this.associateUploadedFsidsOnce(albumId, [fsid]);
     if (!confirmed.has(fsid)) {
       throw new RemoteClientError(`单文件关联未确认：${path.basename(filePath)}`);
@@ -867,16 +882,25 @@ class YikeRemoteClient {
     const paths = [...filePaths];
     const total = Math.max(1, paths.length);
 
-    // 阶段 1：逐个上传文件（仅上传，不调用 addfile）
+    // 阶段 1：并发上传文件（仅上传，不调用 addfile）
+    const CONCURRENCY = 4;
+    const queue = [...paths];
     const fsids = [];
-    for (let i = 0; i < paths.length; i++) {
-      const p = paths[i];
-      if (progress) {
-        progress(Math.floor((i / total) * 85), `正在上传 ${path.basename(p)}（${i + 1}/${total}）`);
+    const existingFiles = [];
+    let done = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, paths.length) }, async () => {
+      while (queue.length > 0) {
+        const p = queue.shift();
+        const i = done++;
+        if (progress) {
+          progress(Math.floor((i / total) * 85), `正在上传 ${path.basename(p)}（${i + 1}/${total}）`);
+        }
+        const { fsid, alreadyExist } = await this.uploadFilePayloadOnce(p, null);
+        fsids.push(fsid);
+        if (alreadyExist) existingFiles.push(path.basename(p));
       }
-      const fsid = await this.uploadFilePayloadOnce(p, null);
-      fsids.push(fsid);
-    }
+    });
+    await Promise.all(workers);
 
     // 阶段 2：批量关联到相册（一次 addfile，全局节流）
     if (progress) progress(90, `正在将 ${fsids.length} 个文件统一加入相册`);
@@ -890,6 +914,7 @@ class YikeRemoteClient {
       );
     }
     if (progress) progress(100, `已上传并确认入册 ${fsids.length} 个文件`);
+    return { uploaded: fsids.length, existingFiles };
   }
 
   /**

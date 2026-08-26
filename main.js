@@ -1098,8 +1098,8 @@ async function handleMethod(method, params, sender) {
 
   if (method === "open_system_viewer") {
     const { open_system_viewer } = require("./src/platform_services");
-    open_system_viewer(params.path || "");
-    return { opened: true };
+    const opened = await open_system_viewer(params.path || "");
+    return { opened };
   }
 
   // ---- Download cache ----
@@ -1222,12 +1222,12 @@ async function handleMethod(method, params, sender) {
     if (!client) throw new Error("未登录");
     const albumId = params.album_id || "";
     const paths = params.paths || [];
-    await client.uploadFiles(albumId, paths, (value, text) => {
+    const result = await client.uploadFiles(albumId, paths, (value, text) => {
       if (sender && !sender.isDestroyed()) {
         sender.send("bridge:progress", value, text);
       }
     });
-    return { done: true };
+    return { done: true, existing_files: result.existingFiles || [] };
   }
 
   if (method === "download_media") {

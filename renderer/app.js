@@ -918,7 +918,17 @@ $("btnMediaUpload").addEventListener("click", async () => {
   const paths = await window.api.openFiles();
   if (!paths || paths.length === 0) return;
   setProgress(0, "准备上传媒体");
-  try { await bridge("upload_media", { album_id: state.currentAlbum.album_id, paths }); setProgress(100, "上传完成"); toast("上传完成", "info"); selectAlbum(state.currentAlbum); }
+  try {
+    const res = await bridge("upload_media", { album_id: state.currentAlbum.album_id, paths });
+    setProgress(100, "上传完成");
+    if (res.existing_files && res.existing_files.length > 0) {
+      const names = res.existing_files.join("、");
+      toast(`上传完成，其中 ${res.existing_files.length} 个文件已存在于云端：${names}`, "warning", 5000);
+    } else {
+      toast("上传完成", "info");
+    }
+    selectAlbum(state.currentAlbum);
+  }
   catch (err) { setProgress(0, "操作失败"); toast("上传失败: " + err.message, "error"); }
 });
 
@@ -983,9 +993,14 @@ async function handleDroppedUpload(paths) {
   if (mediaPaths.length === 0) { toast("没有可上传的图片或视频文件。", "warning"); return; }
   setProgress(0, "正在上传拖入的文件");
   try {
-    await bridge("upload_media", { album_id: state.currentAlbum.album_id, paths: mediaPaths });
+    const res = await bridge("upload_media", { album_id: state.currentAlbum.album_id, paths: mediaPaths });
     setProgress(100, "上传完成");
-    toast(`已上传 ${mediaPaths.length} 个文件`, "info");
+    if (res.existing_files && res.existing_files.length > 0) {
+      const names = res.existing_files.join("、");
+      toast(`已上传 ${mediaPaths.length} 个文件，其中 ${res.existing_files.length} 个已存在于云端：${names}`, "warning", 5000);
+    } else {
+      toast(`已上传 ${mediaPaths.length} 个文件`, "info");
+    }
     selectAlbum(state.currentAlbum);
   } catch (err) {
     setProgress(0, "操作失败");

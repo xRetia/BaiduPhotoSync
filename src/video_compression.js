@@ -119,23 +119,28 @@ function needs_compression(filePath, options) {
   }
 }
 
-function _runCapture(command, timeout = 30) {
-  try {
-    const output = execSync(command.map((c) => `"${c}"`).join(" "), {
-      encoding: "utf-8",
-      timeout: timeout * 1000,
-      stdio: ["pipe", "pipe", "pipe"],
+function _runCapture(args, timeout = 30) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(args[0], args.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    proc.stdout.on("data", (d) => (out += d.toString("utf-8")));
+    proc.stderr.on("data", (d) => (err += d.toString("utf-8")));
+    const timer = setTimeout(() => proc.kill(), timeout * 1000);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(new VideoCompressionError(`FFmpeg 命令失败：${(err || out).trim().slice(-1200)}`));
     });
-    return output;
-  } catch (err) {
-    const detail = (err.stderr || err.stdout || "").trim().slice(-1200);
-    throw new VideoCompressionError(`FFmpeg 命令失败：${detail || err.name}`);
-  }
+    proc.on("error", (e) => {
+      clearTimeout(timer);
+      reject(new VideoCompressionError(`无法启动 FFmpeg：${e.name}`));
+    });
+  });
 }
 
-function probe_video(filePath) {
+async function probe_video(filePath) {
   const ffprobe = locate_ffprobe();
-  const raw = _runCapture([
+  const raw = await _runCapture([
     ffprobe, "-v", "error", "-show_entries",
     "format=duration:stream=codec_type,width,height", "-of", "json", filePath,
   ]);
@@ -160,9 +165,9 @@ function probe_video(filePath) {
 
 let _usableEncodersCache = null;
 
-function available_encoders() {
+async function available_encoders() {
   const ffmpeg = locate_ffmpeg();
-  const text = _runCapture([ffmpeg, "-hide_banner", "-encoders"]);
+  const text = await _runCapture([ffmpeg, "-hide_banner", "-encoders"]);
   const result = [];
   for (const encoder of ["h264_amf", "h264_nvenc", "h264_qsv", "libx264"]) {
     for (const line of text.split("\n")) {
@@ -175,14 +180,17 @@ function available_encoders() {
   return result;
 }
 
-function usable_encoders() {
+async function usable_encoders() {
   if (_usableEncodersCache !== null) return [..._usableEncodersCache];
   const ffmpeg = locate_ffmpeg();
   const working = [];
-  for (const encoder of available_encoders()) {
+  for (const encoder of await available_encoders()) {
     try {
-      execSync(
-        `"${ffmpeg}" -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x64:r=1:d=1 -frames:v 1 -c:v ${encoder} -f null -`,
+      const { spawnSync } = require("child_process");
+      spawnSync(
+        ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi",
+          "-i", "color=c=black:s=64x64:r=1:d=1", "-frames:v", "1",
+          "-c:v", encoder, "-f", "null", "-"],
         { stdio: "ignore", timeout: 15000 }
       );
       working.push(encoder);
@@ -195,8 +203,8 @@ function usable_encoders() {
   return [...working];
 }
 
-function _encoderOrder(videoBitrateBps) {
-  const installed = usable_encoders();
+async function _encoderOrder(videoBitrateBps) {
+  const installed = await usable_encoders();
   const ordered = ["h264_amf", "h264_nvenc", "h264_qsv"].filter((e) => installed.includes(e));
   if (ordered.includes("h264_amf") && videoBitrateBps < AMF_LOW_BITRATE_BPS) {
     ordered.splice(ordered.indexOf("h264_amf"), 1);
@@ -316,7 +324,7 @@ function _runEncode(command, durationSeconds, progress) {
 }
 
 async function compress_video(source, output, options, progress = null) {
-  const probe = probe_video(source);
+  const probe = await probe_video(source);
   const sourceBytes = fs.statSync(source).size;
   const baseBudget = _videoBitrateBudget(probe, options.target_bytes);
   let lastError = null;
@@ -326,7 +334,7 @@ async function compress_video(source, output, options, progress = null) {
     if (budget < _minimumVideoBitrateBps(height)) continue;
 
     for (let attempt = 0; attempt < 3; attempt++) {
-      for (const encoder of _encoderOrder(budget)) {
+      for (const encoder of await _encoderOrder(budget)) {
         try {
           if (fs.existsSync(output)) fs.unlinkSync(output);
           if (progress) progress(1, `使用 ${encoder} 压缩为 ${width}×${height}`);
@@ -371,14 +379,25 @@ async function compress_video(source, output, options, progress = null) {
 
 /**
  * 异步上下文管理器：如果需要压缩，在临时目录中创建压缩副本，完成后清理。
- * @returns {Promise<CompressionResult|null>} 压缩结果或 null（不需要压缩时）
+ *
+ * 采用 use 回调模式：临时文件在 use 回调返回后才被清理，
+ * 避免调用方在上传完成前临时文件就被删除的 bug（JS try…finally + return 语义）。
+ *
+ * @param {string} source - 源文件路径
+ * @param {VideoCompressionOptions} options - 压缩选项
+ * @param {function|null} progress - 进度回调
+ * @param {function|null} use - 异步回调 (prepared: CompressionResult|null) => any
+ * @returns {Promise<any>} use 回调的返回值
  */
-async function prepared_video_upload(source, options, progress = null) {
-  if (!needs_compression(source, options)) return null;
+async function prepared_video_upload(source, options, progress = null, use = null) {
+  if (!needs_compression(source, options)) {
+    return use ? await use(null) : null;
+  }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "yike-video-upload-"));
   const output = path.join(tempDir, path.basename(source));
   try {
     const result = await compress_video(source, output, options, progress);
+    if (use) return await use(result);
     return result;
   } finally {
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}

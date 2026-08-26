@@ -36,12 +36,16 @@ async function run() {
     const client = new YikeRemoteClient(cookieText);
     client._albums.set(String(albumId), albumInfo);
 
-    // 视频压缩（如果需要）
-    const prepared = await prepared_video_upload(filePath, compressionOptions, report);
-    const uploadPath = prepared ? prepared.path : filePath;
-    const compressedNote = prepared ? "（已上传临时压缩副本，本地高清原件未修改）" : "";
-
-    const fsid = await client.uploadFilePayloadOnce(uploadPath, report);
+    // 视频压缩（如果需要）—— use 回调模式：临时压缩文件在上传完成后才清理
+    const { fsid, uploadPath } = await prepared_video_upload(
+      filePath, compressionOptions, report,
+      async (prepared) => {
+        const p = prepared ? prepared.path : filePath;
+        const result = await client.uploadFilePayloadOnce(p, report);
+        return { fsid: result.fsid, uploadPath: p, alreadyExist: result.alreadyExist };
+      }
+    );
+    const compressedNote = uploadPath !== filePath ? "（已上传临时压缩副本，本地高清原件未修改）" : "";
 
     if (process.send) {
       process.send({

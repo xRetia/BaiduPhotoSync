@@ -291,6 +291,7 @@ class API {
       if (!preC || !preC.data) {
         throw new Error("文件已存在但响应缺少 data");
       }
+      preC.data._alreadyExist = true;
       return preC.data;
     } else {
       log.error("api", `unknown return_type = ${return_type} @upload_1file_directly`);

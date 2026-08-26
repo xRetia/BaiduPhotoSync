@@ -42,7 +42,9 @@ class LocalScanCache {
   _load() {
     try {
       const payload = JSON.parse(fs.readFileSync(this.cachePath, "utf-8"));
-      if (payload.version !== CACHE_VERSION || typeof payload.entries !== "object") {
+      if (payload.version !== CACHE_VERSION ||
+          !payload.entries || typeof payload.entries !== "object" ||
+          Array.isArray(payload.entries)) {
         return;
       }
       this._entries = payload.entries;
