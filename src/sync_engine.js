@@ -19,6 +19,7 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const { fork } = require("child_process");
+const { Worker } = require("worker_threads");
 const { LocalScanCache, CACHE_DIRECTORY_NAME } = require("./local_scan_cache");
 const { validate_media_file, free_user_size_message, media_kind } = require("./media_validation");
 const { VideoCompressionOptions, prepared_video_upload } = require("./video_compression");
@@ -94,6 +95,65 @@ function nameKey(name) {
   return path.basename(name).trim().normalize("NFC").toLowerCase();
 }
 
+// ========== MD5 线程池 ==========
+// 通过 worker_threads 在独立线程中并行计算文件 MD5，
+// 避免在比对阶段因单线程读取+哈希大文件而阻塞，显著加快同步计划生成。
+
+class Md5Pool {
+  constructor(size) {
+    this.size = Math.max(1, size || 1);
+    this.workers = [];
+    this.idle = [];
+    this.queue = [];
+    this.nextId = 1;
+    this.pending = new Map();
+    for (let i = 0; i < this.size; i++) {
+      const worker = new Worker(path.join(__dirname, "md5_worker.js"));
+      worker._busy = false;
+      worker.on("message", (msg) => this._onMessage(worker, msg));
+      this.workers.push(worker);
+      this.idle.push(worker);
+    }
+  }
+
+  _onMessage(worker, msg) {
+    const job = this.pending.get(msg.id);
+    if (!job) return;
+    this.pending.delete(msg.id);
+    worker._busy = false;
+    this.idle.push(worker);
+    if (msg.error) job.reject(new Error(msg.error));
+    else job.resolve(msg.hash);
+    this._drain();
+  }
+
+  _drain() {
+    while (this.idle.length > 0 && this.queue.length > 0) {
+      const worker = this.idle.pop();
+      const { id, filePath, resolve, reject } = this.queue.shift();
+      worker._busy = true;
+      this.pending.set(id, { resolve, reject });
+      worker.postMessage({ type: "md5", id, path: filePath });
+    }
+  }
+
+  compute(filePath) {
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      this.queue.push({ id, filePath, resolve, reject });
+      this._drain();
+    });
+  }
+
+  terminate() {
+    for (const worker of this.workers) {
+      try { worker.terminate(); } catch (e) { /* ignore */ }
+    }
+    this.workers = [];
+    this.idle = [];
+  }
+}
+
 // ========== 枚举 ==========
 
 const SyncDirection = {
@@ -121,6 +181,7 @@ const PlanAction = {
   DOWNLOAD: "下载到本地",
   DELETE_REMOTE: "删除云端媒体",
   DELETE_LOCAL: "删除本地媒体",
+  DELETE_LOCAL_FOLDER: "删除本地文件夹",
   CONFLICT: "需要处理冲突",
   SKIP: "无需操作",
 };
@@ -228,6 +289,7 @@ class SyncEngine {
     max_workers = 4,
     download_workers = 4,
     list_threads = 8,
+    compare_threads = Math.max(1, Math.min((os.cpus().length || 4), 8)),
     compare_mode = FileCompareMode.SMART,
     compression_options = null,
   } = {}) {
@@ -235,6 +297,7 @@ class SyncEngine {
     this.max_workers = Math.max(1, Math.min(max_workers, 10));
     this.download_workers = Math.max(1, Math.min(download_workers, 10));
     this.list_threads = Math.max(1, Math.min(list_threads, 16));
+    this.compare_threads = Math.max(1, Math.min(compare_threads, 16));
     this.compare_mode = compare_mode;
     this.compression_options = compression_options || new VideoCompressionOptions();
   }
@@ -377,6 +440,254 @@ class SyncEngine {
     return true;
   }
 
+  async _sameFileAsync(local, remote, md5Of) {
+    if (local.size !== remote.size) return false;
+    if (remote.md5) {
+      const localMd5 = await md5Of(local.path);
+      return localMd5.toLowerCase() === remote.md5.toLowerCase();
+    }
+    return true;
+  }
+
+  // 比对单个相册/文件夹内的媒体并产出同步动作（不含序号）。
+  // 通过 md5Of（基于线程池）并行计算本地文件 MD5，提升比对速度。
+  async _compareAlbum(ctx) {
+    const { albumKey, localFolder, remoteAlbum, albumName, direction, enableDeletions, ignoredKeys, remoteMedia, md5Of, addUpload } = ctx;
+    const actions = [];
+    const self = this;
+    function add(action, mediaName = "", extra = {}) {
+      actions.push({ action, album_name: albumName, media_name: mediaName, ...extra });
+    }
+
+    if (ignoredKeys.has(albumKey)) {
+      add(PlanAction.SKIP, "", { detail: "已加入忽略列表" });
+      console.debug(`跳过已忽略相册：${albumName}`);
+      return actions;
+    }
+
+    // 跳过非媒体文件
+    if (localFolder) {
+      for (const [mediaName, reason] of localFolder.skipped_files) {
+        add(PlanAction.SKIP, mediaName, {
+          local_path: path.join(localFolder.path, mediaName),
+          detail: `跳过：非有效照片/视频（${reason}）`,
+        });
+      }
+    }
+
+    // 仅云端
+    if (!localFolder && remoteAlbum) {
+      if (direction === SyncDirection.REMOTE_TO_LOCAL || direction === SyncDirection.BIDIRECTIONAL) {
+        add(PlanAction.CREATE_LOCAL_FOLDER, "", {
+          remote_album_id: remoteAlbum.album_id,
+          detail: "云端相册仅存在于云端",
+        });
+        for (const media of (remoteMedia[remoteAlbum.album_id] || [])) {
+          add(PlanAction.DOWNLOAD, media.name, {
+            remote_album_id: remoteAlbum.album_id,
+            remote_fsid: media.fsid,
+            size: media.size,
+            detail: "下载云端新增媒体",
+          });
+        }
+      } else {
+        add(PlanAction.SKIP, "", { detail: "仅存在于云端；本地→云端模式不处理" });
+      }
+      return actions;
+    }
+
+    // 仅本地
+    if (localFolder && !remoteAlbum) {
+      if (direction === SyncDirection.LOCAL_TO_REMOTE || direction === SyncDirection.BIDIRECTIONAL) {
+        add(PlanAction.CREATE_REMOTE_ALBUM, "", {
+          local_path: localFolder.path,
+          detail: "本地文件夹仅存在于本地",
+        });
+        for (const media of localFolder.files) {
+          addUpload(media, albumName, null, "上传本地新增媒体");
+        }
+      } else {
+        // 云端→本地模式：勾选删除时移除本地多余相册及其媒体
+        if (enableDeletions) {
+          for (const media of localFolder.files) {
+            add(PlanAction.DELETE_LOCAL, media.name, {
+              local_path: media.path,
+              size: media.size,
+              detail: "按云端→本地删除策略移除本地多余媒体",
+            });
+          }
+          add(PlanAction.DELETE_LOCAL_FOLDER, "", {
+            local_path: localFolder.path,
+            detail: "按云端→本地删除策略移除本地多余相册",
+          });
+        } else {
+          add(PlanAction.SKIP, "", { detail: "仅存在于本地；云端→本地模式不处理" });
+        }
+      }
+      return actions;
+    }
+
+    if (!localFolder || !remoteAlbum) return actions;
+
+    const before = actions.length;
+    const localFiles = {};
+    for (const item of localFolder.files) {
+      const key = nameKey(item.name);
+      if (!(key in localFiles)) localFiles[key] = item;
+    }
+    const remoteFiles = {};
+    for (const item of (remoteMedia[remoteAlbum.album_id] || [])) {
+      const key = nameKey(item.name);
+      if (key in remoteFiles) {
+        console.warn(`相册 ${albumName} 有同名云端媒体：${item.name}；同步按首个条目判断`);
+        continue;
+      }
+      remoteFiles[key] = item;
+    }
+
+    // 同名匹配快速路径
+    const matchedLocalKeys = new Set();
+    const matchedRemoteKeys = new Set();
+    const commonKeys = [...new Set([...Object.keys(localFiles), ...Object.keys(remoteFiles)])].sort();
+    for (const mediaKey of commonKeys) {
+      if (!(mediaKey in localFiles) || !(mediaKey in remoteFiles)) continue;
+      const localFile = localFiles[mediaKey];
+      const remoteFile = remoteFiles[mediaKey];
+      if (await self._sameFileAsync(localFile, remoteFile, md5Of)) {
+        matchedLocalKeys.add(mediaKey);
+        matchedRemoteKeys.add(mediaKey);
+      } else if (media_kind(localFile.path) === "video") {
+        matchedLocalKeys.add(mediaKey);
+        matchedRemoteKeys.add(mediaKey);
+        console.info(
+          `同名视频的云端内容与本地不同；按云端压缩替代版本视为已同步：${albumName}/${localFile.name}（本地 ${localFile.size} bytes，云端 ${remoteFile.size} bytes）`
+        );
+      } else if (self.compare_mode === FileCompareMode.SMART || self.compare_mode === FileCompareMode.NAME_ONLY) {
+        if (direction === SyncDirection.BIDIRECTIONAL) {
+          // 双向同步：内容不同的同名非视频文件，按创建日期“新覆盖旧”
+          const localCreated = localFile.created_at || 0;
+          const remoteCreated = remoteFile.created_at || 0;
+          if (localCreated > remoteCreated) {
+            matchedLocalKeys.add(mediaKey);
+            matchedRemoteKeys.add(mediaKey);
+            add(PlanAction.DELETE_REMOTE, remoteFile.name, {
+              remote_album_id: remoteAlbum.album_id,
+              remote_fsid: remoteFile.fsid,
+              size: remoteFile.size,
+              detail: "双向同步：本地版本创建时间更新，移除云端旧版本",
+            });
+            addUpload(localFile, albumName, remoteAlbum.album_id, "双向同步：用本地新版本覆盖云端");
+            console.info(`双向同步：本地版本更新，覆盖云端：${albumName}/${localFile.name}（本地 ${localFile.size} bytes / 创建 ${localCreated}，云端 ${remoteFile.size} bytes / 创建 ${remoteCreated}）`);
+          } else if (remoteCreated > localCreated) {
+            matchedLocalKeys.add(mediaKey);
+            matchedRemoteKeys.add(mediaKey);
+            add(PlanAction.DELETE_LOCAL, localFile.name, {
+              local_path: localFile.path,
+              size: localFile.size,
+              detail: "双向同步：云端版本创建时间更新，移除本地旧版本",
+            });
+            add(PlanAction.DOWNLOAD, remoteFile.name, {
+              remote_album_id: remoteAlbum.album_id,
+              remote_fsid: remoteFile.fsid,
+              size: remoteFile.size,
+              detail: "双向同步：用云端新版本覆盖本地",
+            });
+            console.info(`双向同步：云端版本更新，覆盖本地：${albumName}/${localFile.name}（本地 ${localFile.size} bytes / 创建 ${localCreated}，云端 ${remoteFile.size} bytes / 创建 ${remoteCreated}）`);
+          } else if (self.compare_mode === FileCompareMode.CONTENT_FIRST) {
+            matchedLocalKeys.add(mediaKey);
+            matchedRemoteKeys.add(mediaKey);
+            add(PlanAction.CONFLICT, localFile.name, {
+              local_path: localFile.path,
+              remote_album_id: remoteAlbum.album_id,
+              remote_fsid: remoteFile.fsid,
+              size: localFile.size,
+              detail: "同名非视频媒体的大小或 MD5 不同且创建时间相同；内容优先模式要求人工确认",
+            });
+          } else {
+            matchedLocalKeys.add(mediaKey);
+            matchedRemoteKeys.add(mediaKey);
+          }
+        } else {
+          matchedLocalKeys.add(mediaKey);
+          matchedRemoteKeys.add(mediaKey);
+        }
+      } else {
+        // CONTENT_FIRST
+        matchedLocalKeys.add(mediaKey);
+        matchedRemoteKeys.add(mediaKey);
+        add(PlanAction.CONFLICT, localFile.name, {
+          local_path: localFile.path,
+          remote_album_id: remoteAlbum.album_id,
+          remote_fsid: remoteFile.fsid,
+          size: localFile.size,
+          detail: "同名非视频媒体的大小或 MD5 不同；内容优先模式要求人工确认",
+        });
+      }
+    }
+
+    // 内容签名去重
+    if (self.compare_mode !== FileCompareMode.NAME_ONLY) {
+      const remoteBySignature = {};
+      for (const [mediaKey, remoteFile] of Object.entries(remoteFiles)) {
+        if (!remoteFile.md5) continue;
+        const sig = `${remoteFile.size}:${remoteFile.md5.toLowerCase()}`;
+        if (!remoteBySignature[sig]) remoteBySignature[sig] = [];
+        remoteBySignature[sig].push([mediaKey, remoteFile]);
+      }
+      const remoteCandidateSizes = new Set(Object.values(remoteBySignature).map((list) => list[0][1].size));
+      for (const [mediaKey, localFile] of Object.entries(localFiles)) {
+        if (matchedLocalKeys.has(mediaKey) || !remoteCandidateSizes.has(localFile.size)) continue;
+        const localMd5 = await md5Of(localFile.path);
+        const sig = `${localFile.size}:${localMd5.toLowerCase()}`;
+        const candidates = remoteBySignature[sig] || [];
+        if (candidates.length === 0) continue;
+        const [remoteKey, remoteFile] = candidates[0];
+        matchedLocalKeys.add(mediaKey);
+        matchedRemoteKeys.add(remoteKey);
+        console.debug(`检测到目标相册已有相同内容（含服务端自动改名或本地重复副本），跳过重复同步：${albumName}/${localFile.name} -> ${remoteFile.name}`);
+      }
+    }
+
+    // 未匹配的本地文件
+    for (const mediaKey of Object.keys(localFiles).sort().filter((k) => !matchedLocalKeys.has(k))) {
+      const localFile = localFiles[mediaKey];
+      if (direction === SyncDirection.LOCAL_TO_REMOTE || direction === SyncDirection.BIDIRECTIONAL) {
+        addUpload(localFile, albumName, remoteAlbum.album_id, "上传本地新增媒体");
+      } else if (enableDeletions) {
+        add(PlanAction.DELETE_LOCAL, localFile.name, {
+          local_path: localFile.path,
+          size: localFile.size,
+          detail: "按云端→本地删除策略移除本地多余媒体",
+        });
+      }
+    }
+
+    // 未匹配的远程文件
+    for (const mediaKey of Object.keys(remoteFiles).sort().filter((k) => !matchedRemoteKeys.has(k))) {
+      const remoteFile = remoteFiles[mediaKey];
+      if (direction === SyncDirection.REMOTE_TO_LOCAL || direction === SyncDirection.BIDIRECTIONAL) {
+        add(PlanAction.DOWNLOAD, remoteFile.name, {
+          remote_album_id: remoteAlbum.album_id,
+          remote_fsid: remoteFile.fsid,
+          size: remoteFile.size,
+          detail: "下载云端新增媒体",
+        });
+      } else if (enableDeletions) {
+        add(PlanAction.DELETE_REMOTE, remoteFile.name, {
+          remote_album_id: remoteAlbum.album_id,
+          remote_fsid: remoteFile.fsid,
+          size: remoteFile.size,
+          detail: "按本地→云端删除策略移除云端多余媒体",
+        });
+      }
+    }
+
+    if (actions.length === before) {
+      add(PlanAction.SKIP, "", { detail: "两端已存在同名媒体，无需同步" });
+    }
+    return actions;
+  }
+
   // ========== build_plan ==========
 
   async buildPlan(root, direction, sortField, reverse, enableDeletions, progress = null, ignoredAlbumNames = [], skipOversize = false) {
@@ -483,179 +794,73 @@ class SyncEngine {
       return 0;
     });
 
-    for (let i = 0; i < sortedKeys.length; i++) {
-      const albumKey = sortedKeys[i];
-      const localFolder = localByKey[albumKey];
-      const remoteAlbum = remoteByKey[albumKey];
-      const albumName = localFolder ? localFolder.name : remoteAlbum ? remoteAlbum.title : albumKey;
-
-      if (progress) {
-        progress(30 + Math.floor(((i + 1) / totalAlbums) * 60), `正在比较：${albumName}（${i + 1}/${totalAlbums}）`);
+    // 多线程并行比对：受 compare_threads 限制并发数，
+    // 各相册的比对（含本地文件 MD5 计算）在 worker_threads 池中真正并行执行。
+    const pool = new Md5Pool(this.compare_threads);
+    const md5Cache = new Map();
+    function md5Of(filePath) {
+      let cached = md5Cache.get(filePath);
+      if (cached === undefined) {
+        cached = pool.compute(filePath);
+        md5Cache.set(filePath, cached);
       }
+      return cached;
+    }
 
-      if (ignoredKeys.has(albumKey)) {
-        add(PlanAction.SKIP, albumName, "", { detail: "已加入忽略列表" });
-        console.debug(`跳过已忽略相册：${albumName}`);
-        continue;
-      }
+    const selfRef = this;
 
-      // 跳过非媒体文件
-      if (localFolder) {
-        for (const [mediaName, reason] of localFolder.skipped_files) {
-          add(PlanAction.SKIP, albumName, mediaName, {
-            local_path: path.join(localFolder.path, mediaName),
-            detail: `跳过：非有效照片/视频（${reason}）`,
+    const albumResults = new Array(sortedKeys.length);
+    const compareConcurrency = Math.min(this.compare_threads, sortedKeys.length);
+    let albumIndex = 0;
+    let compareCompleted = 0;
+
+    async function compareWorker() {
+      while (albumIndex < sortedKeys.length) {
+        const i = albumIndex++;
+        const albumKey = sortedKeys[i];
+        const localFolder = localByKey[albumKey];
+        const remoteAlbum = remoteByKey[albumKey];
+        const albumName = localFolder ? localFolder.name : remoteAlbum ? remoteAlbum.title : albumKey;
+        try {
+          albumResults[i] = await selfRef._compareAlbum({
+            albumKey,
+            localFolder,
+            remoteAlbum,
+            albumName,
+            direction,
+            enableDeletions,
+            ignoredKeys,
+            remoteMedia,
+            md5Of,
+            addUpload,
           });
+        } catch (err) {
+          console.error(`比对相册失败：${albumName}，错误=${err.message}`);
+          albumResults[i] = [];
+          throw err;
+        }
+        compareCompleted++;
+        if (progress) {
+          progress(30 + Math.floor((compareCompleted / totalAlbums) * 60), `正在比较：${albumName}（${compareCompleted}/${totalAlbums}）`);
         }
       }
+    }
 
-      // 仅云端
-      if (!localFolder && remoteAlbum) {
-        if (direction === SyncDirection.REMOTE_TO_LOCAL || direction === SyncDirection.BIDIRECTIONAL) {
-          add(PlanAction.CREATE_LOCAL_FOLDER, albumName, "", {
-            remote_album_id: remoteAlbum.album_id,
-            detail: "云端相册仅存在于云端",
-          });
-          for (const media of (remoteMedia[remoteAlbum.album_id] || [])) {
-            add(PlanAction.DOWNLOAD, albumName, media.name, {
-              remote_album_id: remoteAlbum.album_id,
-              remote_fsid: media.fsid,
-              size: media.size,
-              detail: "下载云端新增媒体",
-            });
-          }
-        } else {
-          add(PlanAction.SKIP, albumName, "", { detail: "仅存在于云端；本地→云端模式不处理" });
-        }
-        continue;
-      }
+    const compareWorkers = [];
+    for (let i = 0; i < compareConcurrency; i++) compareWorkers.push(compareWorker());
+    try {
+      await Promise.all(compareWorkers);
+    } finally {
+      pool.terminate();
+    }
 
-      // 仅本地
-      if (localFolder && !remoteAlbum) {
-        if (direction === SyncDirection.LOCAL_TO_REMOTE || direction === SyncDirection.BIDIRECTIONAL) {
-          add(PlanAction.CREATE_REMOTE_ALBUM, albumName, "", {
-            local_path: localFolder.path,
-            detail: "本地文件夹仅存在于本地",
-          });
-          for (const media of localFolder.files) {
-            addUpload(media, albumName, null, "上传本地新增媒体");
-          }
-        } else {
-          add(PlanAction.SKIP, albumName, "", { detail: "仅存在于本地；云端→本地模式不处理" });
-        }
-        continue;
-      }
-
-      if (!localFolder || !remoteAlbum) continue;
-
-      const before = actions.length;
-      const localFiles = {};
-      for (const item of localFolder.files) {
-        const key = nameKey(item.name);
-        if (!(key in localFiles)) localFiles[key] = item;
-      }
-      const remoteFiles = {};
-      for (const item of (remoteMedia[remoteAlbum.album_id] || [])) {
-        const key = nameKey(item.name);
-        if (key in remoteFiles) {
-          console.warn(`相册 ${albumName} 有同名云端媒体：${item.name}；同步按首个条目判断`);
-          continue;
-        }
-        remoteFiles[key] = item;
-      }
-
-      // 同名匹配快速路径
-      const matchedLocalKeys = new Set();
-      const matchedRemoteKeys = new Set();
-      const commonKeys = [...new Set([...Object.keys(localFiles), ...Object.keys(remoteFiles)])].sort();
-      for (const mediaKey of commonKeys) {
-        if (!(mediaKey in localFiles) || !(mediaKey in remoteFiles)) continue;
-        const localFile = localFiles[mediaKey];
-        const remoteFile = remoteFiles[mediaKey];
-        if (this._sameFile(localFile, remoteFile)) {
-          matchedLocalKeys.add(mediaKey);
-          matchedRemoteKeys.add(mediaKey);
-        } else if (media_kind(localFile.path) === "video") {
-          matchedLocalKeys.add(mediaKey);
-          matchedRemoteKeys.add(mediaKey);
-          console.info(
-            `同名视频的云端内容与本地不同；按云端压缩替代版本视为已同步：${albumName}/${localFile.name}（本地 ${localFile.size} bytes，云端 ${remoteFile.size} bytes）`
-          );
-        } else if (this.compare_mode === FileCompareMode.SMART || this.compare_mode === FileCompareMode.NAME_ONLY) {
-          matchedLocalKeys.add(mediaKey);
-          matchedRemoteKeys.add(mediaKey);
-        } else {
-          // CONTENT_FIRST
-          matchedLocalKeys.add(mediaKey);
-          matchedRemoteKeys.add(mediaKey);
-          add(PlanAction.CONFLICT, albumName, localFile.name, {
-            local_path: localFile.path,
-            remote_album_id: remoteAlbum.album_id,
-            remote_fsid: remoteFile.fsid,
-            size: localFile.size,
-            detail: "同名非视频媒体的大小或 MD5 不同；内容优先模式要求人工确认",
-          });
-        }
-      }
-
-      // 内容签名去重
-      if (this.compare_mode !== FileCompareMode.NAME_ONLY) {
-        const remoteBySignature = {};
-        for (const [mediaKey, remoteFile] of Object.entries(remoteFiles)) {
-          if (!remoteFile.md5) continue;
-          const sig = `${remoteFile.size}:${remoteFile.md5.toLowerCase()}`;
-          if (!remoteBySignature[sig]) remoteBySignature[sig] = [];
-          remoteBySignature[sig].push([mediaKey, remoteFile]);
-        }
-        const remoteCandidateSizes = new Set(Object.values(remoteBySignature).map((list) => list[0][1].size));
-        for (const [mediaKey, localFile] of Object.entries(localFiles)) {
-          if (matchedLocalKeys.has(mediaKey) || !remoteCandidateSizes.has(localFile.size)) continue;
-          const sig = `${localFile.size}:${localFile.md5().toLowerCase()}`;
-          const candidates = remoteBySignature[sig] || [];
-          if (candidates.length === 0) continue;
-          const [remoteKey, remoteFile] = candidates[0];
-          matchedLocalKeys.add(mediaKey);
-          matchedRemoteKeys.add(remoteKey);
-          console.debug(`检测到目标相册已有相同内容（含服务端自动改名或本地重复副本），跳过重复同步：${albumName}/${localFile.name} -> ${remoteFile.name}`);
-        }
-      }
-
-      // 未匹配的本地文件
-      for (const mediaKey of Object.keys(localFiles).sort().filter((k) => !matchedLocalKeys.has(k))) {
-        const localFile = localFiles[mediaKey];
-        if (direction === SyncDirection.LOCAL_TO_REMOTE || direction === SyncDirection.BIDIRECTIONAL) {
-          addUpload(localFile, albumName, remoteAlbum.album_id, "上传本地新增媒体");
-        } else if (enableDeletions) {
-          add(PlanAction.DELETE_LOCAL, albumName, localFile.name, {
-            local_path: localFile.path,
-            size: localFile.size,
-            detail: "按云端→本地删除策略移除本地多余媒体",
-          });
-        }
-      }
-
-      // 未匹配的远程文件
-      for (const mediaKey of Object.keys(remoteFiles).sort().filter((k) => !matchedRemoteKeys.has(k))) {
-        const remoteFile = remoteFiles[mediaKey];
-        if (direction === SyncDirection.REMOTE_TO_LOCAL || direction === SyncDirection.BIDIRECTIONAL) {
-          add(PlanAction.DOWNLOAD, albumName, remoteFile.name, {
-            remote_album_id: remoteAlbum.album_id,
-            remote_fsid: remoteFile.fsid,
-            size: remoteFile.size,
-            detail: "下载云端新增媒体",
-          });
-        } else if (enableDeletions) {
-          add(PlanAction.DELETE_REMOTE, albumName, remoteFile.name, {
-            remote_album_id: remoteAlbum.album_id,
-            remote_fsid: remoteFile.fsid,
-            size: remoteFile.size,
-            detail: "按本地→云端删除策略移除云端多余媒体",
-          });
-        }
-      }
-
-      if (actions.length === before) {
-        add(PlanAction.SKIP, albumName, "", { detail: "两端已存在同名媒体，无需同步" });
+    // 按相册原始顺序合并结果，保持序号连续且有序
+    for (let i = 0; i < albumResults.length; i++) {
+      const result = albumResults[i];
+      if (!result) continue;
+      for (const item of result) {
+        const { action, album_name, media_name, ...extra } = item;
+        add(action, album_name, media_name, extra);
       }
     }
 
@@ -797,6 +1002,9 @@ class SyncEngine {
         } else if (action.action === PlanAction.DELETE_LOCAL) {
           if (!action.local_path) throw new Error("同步计划缺少本地删除目标。");
           try { fs.unlinkSync(action.local_path); } catch {}
+        } else if (action.action === PlanAction.DELETE_LOCAL_FOLDER) {
+          if (!action.local_path) throw new Error("同步计划缺少本地删除目标。");
+          try { fs.rmSync(action.local_path, { recursive: true, force: true }); } catch {}
         }
         setStatus(action, "已完成");
       } catch (err) {

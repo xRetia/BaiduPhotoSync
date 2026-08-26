@@ -1082,13 +1082,14 @@ $("btnBuildPlan").addEventListener("click", async () => {
       download_workers: parseInt(settings.download_client_workers) || 4,
       list_threads: parseInt(settings.list_threads) || 8,
     });
-    state.syncActions = actions;
-    populatePlanTable(actions);
-    populateSyncAlbumQueue(actions);
-    const count = actions.length;
-    const conflicts = actions.filter(a => a.action === "冲突").length;
-    const executable = actions.filter(a => a.can_execute).length;
-    const ignored = actions.filter(a => a.action === "跳过" && a.detail && a.detail.includes("忽略")).length;
+    state.syncActionsBase = actions;
+    state.syncActions = applyIgnoreOverlay(actions);
+    populatePlanTable(state.syncActions);
+    populateSyncAlbumQueue(state.syncActions);
+    const count = state.syncActions.length;
+    const conflicts = state.syncActions.filter(a => a.action === "冲突").length;
+    const executable = state.syncActions.filter(a => a.can_execute).length;
+    const ignored = state.syncActions.filter(a => a.action === "无需操作" && a.detail && a.detail.includes("忽略")).length;
     state.syncStatusText = `共 ${count} 项；可执行 ${executable} 项；冲突 ${conflicts} 项；已忽略 ${ignored} 项`;
     setSyncStatus();
     setProgress(100, `计划已生成：${executable} 项待执行`);
@@ -1109,8 +1110,8 @@ function populatePlanTable(actions) {
       const cell = row.insertCell(i); cell.textContent = text; cell.title = text;
     });
     if (action.action === "冲突") row.classList.add("plan-row-conflict");
-    else if (action.action === "删除本地文件" || action.action === "删除云端媒体") row.classList.add("plan-row-delete");
-    else if (action.action === "跳过") row.classList.add("plan-row-skip");
+    else if (action.action === "删除本地文件" || action.action === "删除云端媒体" || action.action === "删除本地文件夹") row.classList.add("plan-row-delete");
+    else if (action.action === "跳过" || (action.action === "无需操作" && action.detail && action.detail.includes("忽略"))) row.classList.add("plan-row-skip");
     applyActionRowStyle(row, action.status);
   });
 }
@@ -1137,7 +1138,7 @@ function populateSyncAlbumQueue(actions) {
   Object.keys(byAlbum).sort((a, b) => a.localeCompare(b)).forEach(name => {
     const albumActions = byAlbum[name];
     const executable = albumActions.filter(a => a.can_execute).length;
-    const ignored = albumActions.some(a => a.action === "跳过" && a.detail && a.detail.includes("忽略"));
+    const ignored = albumActions.some(a => a.detail && a.detail.includes("忽略"));
     let stateText = ignored ? "已忽略" : executable ? `${executable} 项` : "无需操作";
     const item = el("div", "tree-item");
     if (ignored) item.classList.add("ignored");
@@ -1177,7 +1178,38 @@ async function toggleIgnoreAlbum(albumName) {
     setStatus(`已加入忽略列表：${albumName}`);
   }
   await persistIgnoredAlbums();
-  if (state.syncActions.length > 0) $("btnBuildPlan").click();
+  // 直接操作已有的同步计划列表，不重新读取/扫描
+  if (state.syncActionsBase && state.syncActionsBase.length > 0) {
+    state.syncActions = applyIgnoreOverlay(state.syncActionsBase);
+    populatePlanTable(state.syncActions);
+    populateSyncAlbumQueue(state.syncActions);
+    refreshSyncStatusText();
+  }
+}
+
+// 在已生成的同步计划上应用忽略列表覆盖层：被忽略相册的所有动作改为“已跳过”，
+// 不加回任何扫描/读取。移除忽略时亦然（基于原始计划还原）。
+function applyIgnoreOverlay(base) {
+  const ignored = state.ignoredAlbumNames;
+  if (!ignored || ignored.size === 0) return base.slice();
+  const normalized = new Set([...ignored].map(n => n.trim().toLowerCase().replace(/\s+/g, "")));
+  return base.map(a => {
+    const key = (a.album_name || "").trim().toLowerCase().replace(/\s+/g, "");
+    if (normalized.has(key)) {
+      return Object.assign({}, a, { action: "无需操作", detail: "已加入忽略列表", status: "已跳过" });
+    }
+    return Object.assign({}, a);
+  });
+}
+
+function refreshSyncStatusText() {
+  const actions = state.syncActions;
+  const count = actions.length;
+  const conflicts = actions.filter(a => a.action === "冲突").length;
+  const executable = actions.filter(a => a.can_execute).length;
+  const ignored = actions.filter(a => a.action === "无需操作" && a.detail && a.detail.includes("忽略")).length;
+  state.syncStatusText = `共 ${count} 项；可执行 ${executable} 项；冲突 ${conflicts} 项；已忽略 ${ignored} 项`;
+  setSyncStatus();
 }
 
 async function persistIgnoredAlbums() {
@@ -1190,7 +1222,12 @@ $("btnClearIgnored").addEventListener("click", async () => {
   state.ignoredAlbumNames.clear();
   await persistIgnoredAlbums();
   setStatus("已清空忽略列表。");
-  if (state.syncActions.length > 0) $("btnBuildPlan").click();
+  if (state.syncActionsBase && state.syncActionsBase.length > 0) {
+    state.syncActions = applyIgnoreOverlay(state.syncActionsBase);
+    populatePlanTable(state.syncActions);
+    populateSyncAlbumQueue(state.syncActions);
+    refreshSyncStatusText();
+  }
 });
 
 // === Sync execution ===
@@ -1199,7 +1236,7 @@ $("btnExecutePlan").addEventListener("click", async () => {
   if (!state.syncActions.length) { toast("请先生成同步计划。", "info"); return; }
   const executable = state.syncActions.filter(a => a.can_execute && (a.status === "待执行" || a.status === "已停止" || a.status.startsWith("失败") || a.status.startsWith("错误") || a.status.startsWith("待重试")));
   if (executable.length === 0) { toast("当前计划没有可执行的项目。", "info"); return; }
-  const deletes = executable.filter(a => a.action === "删除本地文件" || a.action === "删除云端媒体");
+  const deletes = executable.filter(a => a.action === "删除本地文件" || a.action === "删除云端媒体" || a.action === "删除本地文件夹");
   let message = `确定执行 ${executable.length} 项同步操作吗？\n忽略与冲突项目不会执行。`;
   if (deletes.length > 0) message += `\n\n其中包含 ${deletes.length} 项删除操作，请确认已检查计划。`;
   if (!confirm("确认执行同步\n" + message)) return;
