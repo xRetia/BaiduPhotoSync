@@ -1,6 +1,6 @@
 {
   "name": "baiduphotosync-electron",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "一刻相册同步助手 - Electron 版",
   "main": "main.js",
   "author": {
@@ -52,7 +52,7 @@
         "nsis",
         "portable"
       ],
-      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+      "artifactName": "baiduphotosync-electron-${version}-win-${arch}.${ext}"
     },
     "mac": {
       "target": [
@@ -60,7 +60,7 @@
         "zip"
       ],
       "category": "public.app-category.photography",
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+      "artifactName": "baiduphotosync-electron-${version}-mac-${arch}.${ext}"
     },
     "linux": {
       "target": [
@@ -68,7 +68,7 @@
         "deb"
       ],
       "category": "Utility",
-      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+      "artifactName": "baiduphotosync-electron-${version}-linux-${arch}.${ext}"
     }
   }
 }
