@@ -1,89 +1,102 @@
-<h1 align="center">一刻相册同步助手</h1>
+# Yike Album Sync Assistant
+
 <p align="center">
-  <img src="./.screenshot/mainWindow.png" alt="主窗口" width="640" />
-</p>
-<p align="center">
-  基于百度网盘「一刻相册」公开接口的跨平台桌面照片/视频同步工具 📷🔄
-</p>
-<p align="center">
-  非官方项目，与百度网盘及一刻相册无任何官方关联或背书
+  <img src="./.screenshot/mainWindow.png" alt="Yike Album Sync Assistant main window" width="640" />
 </p>
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <img src="./.screenshot/mainWindow.png" alt="主窗口" width="100%" />
-    </td>
-    <td width="50%" align="center">
-      <img src="./.screenshot/syncCenter.png" alt="同步中心" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <img src="./.screenshot/settingOne.png" alt="设置一" width="100%" />
-    </td>
-    <td width="50%" align="center">
-      <img src="./.screenshot/settingTwo.png" alt="设置二" width="100%" />
-    </td>
-  </tr>
-</table>
+<p align="center">
+  A cross-platform desktop application for synchronizing local photos and videos with Yike Album, built with Electron.
+</p>
 
----
+> **Unofficial project.** This application is not affiliated with, endorsed by, or supported by Baidu Netdisk or Yike Album.
 
-## ✨ 特色功能
+| Album Browser | Sync Center |
+| --- | --- |
+| ![Album browser](./.screenshot/mainWindow.png) | ![Sync center](./.screenshot/syncCenter.png) |
 
-- 🔄 **多模式同步**：支持「本地 → 云端」「云端 → 本地」「双向」三种同步方向
-- ⚡ **多线程加速比对**：比对阶段通过 `worker_threads` 线程池并行计算文件 MD5，显著提升大批量媒体比对速度（并发数随 CPU 核数自动取值，可手动调整）
-- 🧠 **智能内容去重**：同名视频按云端压缩版视为已同步；同名非视频文件按大小 + MD5 内容签名去重，避免重复上传/下载（含服务端自动改名或本地重复副本）
-- 🆕 **双向新覆盖旧**：双向同步时，若同名文件内容不同，按创建日期判定——较新版本覆盖较旧版本，保证两端最终一致
-- 🗂️ **忽略列表**：右键相册即可加入/移除忽略列表，直接作用于已生成的同步计划，**无需重新扫描**本地与云端
-- 🗑️ **删除策略**：云端 → 本地方向勾选删除后，本地多余相册及其媒体会进入删除任务；双向模式不自动推断删除意图，避免误删
-- 🎞️ **超限视频压缩上传**：普通用户单文件超过 30MB 限制时，可自动压缩至 28MB 以内后以原文件名上传，本地高清原件保留
-- ⏯️ **同步控制**：支持暂停 / 继续 / 安全停止；遇「操作过于频繁」（errno 50005）自动暂停并提示
-- 🔐 **隔离上传客户端**：每个上传任务使用独立子进程文件客户端，异常隔离、失败自动重试
+| Settings: General | Settings: Advanced |
+| --- | --- |
+| ![General settings](./.screenshot/settingOne.png) | ![Advanced settings](./.screenshot/settingTwo.png) |
 
-## 运行与构建
+## Overview
 
-本项目为 Electron 桌面应用，源码即产品：
+Yike Album Sync Assistant compares local folders with Yike Album snapshots and creates an explicit synchronization plan before it changes files. It supports local-to-cloud, cloud-to-local, and bidirectional workflows while keeping the current state and each queued action visible in the desktop interface.
+
+The application is implemented as an Electron desktop client. It works with the public interfaces available to a user-authorized personal account and requires a valid account session configured in the application settings.
+
+## Features
+
+| Capability | Description |
+| --- | --- |
+| Synchronization modes | Choose local-to-cloud, cloud-to-local, or bidirectional synchronization. |
+| Parallel comparison | Uses a `worker_threads` pool to calculate media checksums concurrently during comparison. Worker count follows CPU capacity by default and can be adjusted. |
+| Content-aware deduplication | Avoids repeated transfers by comparing names, sizes, and MD5 content signatures. Cloud-compressed video variants are treated as already synchronized when appropriate. |
+| Conflict handling | In bidirectional mode, files with the same name but different content are resolved by creation date so the newer version replaces the older one. |
+| Ignore list | Add or remove albums from the ignore list from the album context menu without rescanning the full local and cloud trees. |
+| Delete safeguards | Cloud-to-local deletion can remove local-only albums and media when explicitly enabled. Bidirectional mode does not infer deletion intent automatically. |
+| Large-video handling | Oversized videos can be compressed to fit service limits while preserving the original local file. |
+| Transfer controls | Pause, resume, or safely stop a synchronization plan. Frequent-operation errors are handled by pausing and reporting the issue. |
+| Isolated upload workers | Upload tasks use independent child processes so individual client failures are isolated and can be retried. |
+
+## Run from Source
+
+Install a supported Node.js runtime, install dependencies, and start the application from the project root.
 
 ```bash
-# 安装依赖
 npm install
-
-# 开发模式运行
 npm run dev
+```
 
-# 生产模式运行
+Use the following command for the normal Electron launch path.
+
+```bash
 npm start
 ```
 
-最低环境要求：
+| Platform | Minimum supported environment |
+| --- | --- |
+| Windows | Windows 10 or Windows 11 |
+| macOS | macOS 12 or later |
+| Linux | A current mainstream Linux distribution on x64 or arm64 hardware |
 
-- <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white" /> Windows 10 / 11
-- <img alt="macOS" src="https://img.shields.io/badge/macOS-12%2B-000000?logo=apple&logoColor=white" /> macOS 12+
-- <img alt="Linux" src="https://img.shields.io/badge/Linux-x64%2Farm64-FCC624?logo=linux&logoColor=000000" /> 主流 Linux 发行版
+## Build and Release
 
-> 使用需在设置中导入有效的百度网盘登录 Cookie（BAIDUID / BDUSS），仅用于调用个人账户授权下的公开接口。
+The project uses `electron-builder` for platform packages. The following command builds local distributable artifacts without publishing them.
 
-### 同步流程简述
+```bash
+npm run dist
+```
 
-1. **生成计划**：扫描本地根目录与云端相册快照，按相册并行比对，生成同步动作列表（上传 / 下载 / 创建相册 / 删除 / 冲突 / 跳过）。
-2. **执行计划**：串行创建相册 → 并发上传（按相册分组、大文件独占通道）→ 并发下载 → 串行收尾。
-3. **结果与状态**：每项动作实时反馈状态（待执行 / 正在执行 / 已完成 / 已跳过 / 失败），可随时暂停或停止。
+The release command builds packages and publishes assets to the configured GitHub Release when a suitable `GH_TOKEN` is available.
 
-## ⚖️ 法律声明与使用限制
+```bash
+npm run release
+```
 
-- 本项目仅供学习与研究使用，禁止任何形式的商业用途（包括但不限于销售、收费服务、广告变现、商业集成等）。
-- 本项目与百度网盘 / 一刻相册无任何官方关联或背书，不使用其商标与标识；涉及的名称与商标归其权利人所有。
-- 数据来源于用户调用的公开接口与个人账户授权；使用时需遵守百度网盘的《用户协议》《社区规则》及相关法律法规。
-- 禁止绕过登录 / 会员权限、DRM / 加密措施，或进行批量爬取、恶意抓取等违反平台规则的行为。
-- 同步操作会真实地增删本地与云端文件，请在执行前确认同步方向与删除策略，重要数据建议提前备份。
+GitHub Actions runs the release workflow for version tags matching `v*`. It builds packages for macOS, Windows, and Linux and uploads the generated artifacts to the tagged GitHub Release.
 
-## 🙏 鸣谢
+## Account Session
 
-- 感谢 [HengyueLi/baiduphoto](https://github.com/HengyueLi/baiduphoto) 对百度网盘「一刻相册」接口的长期整理与开源，为本项目接口封装提供了重要参考。
-- 感谢所有提出 Issue 与反馈的使用者，帮助持续完善同步引擎的稳定性与正确性。
+Configure a valid personal account session in the application's settings before creating a synchronization plan. The session is used only to access the public interfaces available to the authorized account. Do not paste account credentials into issues, pull requests, screenshots, or third-party services.
 
----
+## Synchronization Workflow
 
-如果你觉得这个项目有用，欢迎 ⭐️ Star 支持，也欢迎通过 Issue 交流反馈 🙌
+The application follows a deliberate plan-and-execute model.
+
+1. **Create a plan.** The application scans the selected local root and cloud album snapshot, compares albums in parallel, and produces explicit upload, download, album-creation, deletion, conflict, and skip actions.
+2. **Execute the plan.** Album creation is performed first. Upload and download work is then scheduled with bounded concurrency, followed by finalization work.
+3. **Review progress.** Every action reports a visible state such as pending, running, completed, skipped, or failed. The plan can be paused or safely stopped at any point.
+
+## Responsible Use
+
+This project is intended for learning, research, and personal account management. Do not use it for commercial services, unauthorized account access, bypassing membership or DRM controls, bulk scraping, or any activity that violates platform rules or applicable law.
+
+Synchronization can create, replace, and delete local or cloud files. Verify the selected mode and deletion settings before execution, and maintain independent backups of important data.
+
+## Acknowledgements
+
+This project is informed by the interface research and open-source work in [HengyueLi/baiduphoto](https://github.com/HengyueLi/baiduphoto). Thanks also to everyone who reports issues and contributes feedback that improves the stability and correctness of the synchronization engine.
+
+## Support
+
+If this project is useful to you, consider starring the repository and using GitHub Issues for reproducible bug reports, feature discussions, and implementation feedback.

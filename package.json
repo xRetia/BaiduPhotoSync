@@ -1,9 +1,12 @@
 {
   "name": "baiduphotosync-electron",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "description": "一刻相册同步助手 - Electron 版",
   "main": "main.js",
-  "author": "xRetia",
+  "author": {
+    "name": "xRetia",
+    "email": "xRetia@users.noreply.github.com"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/xRetia/BaiduPhotoSync.git"
