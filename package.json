@@ -3,14 +3,69 @@
   "version": "1.0.0",
   "description": "一刻相册同步助手 - Electron 版",
   "main": "main.js",
+  "author": "xRetia",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xRetia/BaiduPhotoSync.git"
+  },
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "dist": "electron-builder",
+    "release": "electron-builder --publish always"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^24.13.3"
   },
   "allowScripts": {
     "electron@33.4.11": true
+  },
+  "build": {
+    "appId": "com.xretia.baiduphotosync",
+    "productName": "一刻相册同步助手",
+    "copyright": "Copyright © 2024 xRetia",
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xRetia",
+        "repo": "BaiduPhotoSync"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.photography",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    }
   }
 }
