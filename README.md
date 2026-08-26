@@ -81,7 +81,7 @@ npm start
 
 ## 🙏 鸣谢
 
-- 参考 [SocialSisterYi/bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) 对国内网盘 / 相册接口的长期整理思路，为本项目接口封装提供重要参考。
+- 感谢 [HengyueLi/baiduphoto](https://github.com/HengyueLi/baiduphoto) 对百度网盘「一刻相册」接口的长期整理与开源，为本项目接口封装提供了重要参考。
 - 感谢所有提出 Issue 与反馈的使用者，帮助持续完善同步引擎的稳定性与正确性。
 
 ---
