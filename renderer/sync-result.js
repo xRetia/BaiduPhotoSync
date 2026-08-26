@@ -64,7 +64,7 @@ function renderResult(data) {
   if (numbers.pending != null) {
     cardsHtml += `<div class="summary-item"><span class="summary-label">未执行</span><span class="summary-value pending">${numbers.pending}</span></div>`;
   }
-  cardsHtml += `<div class="summary-item"><span class="summary-label">用时</span><span class="summary-value" style="font-size:14px">${summary.match(/总用时：(.+?)(?:\s|$)/)?.[1] || "—"}</span></div>`;
+  cardsHtml += `<div class="summary-item"><span class="summary-label">用时</span><span class="summary-value">${summary.match(/总用时：(.+?)(?:\s|$)/)?.[1] || "—"}</span></div>`;
 
   summaryEl.innerHTML = `<div class="summary-card">${cardsHtml}</div>`;
 
