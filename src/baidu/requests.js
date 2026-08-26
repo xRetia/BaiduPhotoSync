@@ -30,6 +30,24 @@ const TRANSPORT_RETRY_DELAYS = [1, 2, 4]; // seconds
 const CONNECT_TIMEOUT_MS = 10000;
 const READ_TIMEOUT_MS = 30000;
 
+// 百度相册 API 返回的 fsid/fs_id/album_id/tid/uk 等字段是超大整数（18-19 位），
+// 远超 JavaScript Number.MAX_SAFE_INTEGER（2^53-1），JSON.parse 会丢失精度。
+// 用正则将这些字段的值转为字符串，避免精度丢失。
+// 匹配 "fsid":123456789012345678 或 "fs_id":123... 等 → "fsid":"123..."
+const BIGINT_FIELDS = ["fsid", "fs_id", "album_id", "tid", "uk", "request_id"];
+const BIGINT_RE = new RegExp(
+  `"(?:${BIGINT_FIELDS.join("|")})"\\s*:\\s*(\\d{16,})`,
+  "g"
+);
+
+async function parseBaiduJson(resp) {
+  const text = await resp.text();
+  const safeText = text.replace(BIGINT_RE, (match, num) =>
+    match.replace(num, `"${num}"`)
+  );
+  return JSON.parse(safeText);
+}
+
 class Requests {
   constructor(cookies) {
     this.cookies = cookies; // { name: value }
@@ -196,7 +214,7 @@ class Requests {
   /** GET and parse JSON */
   async getReqJson(url, params = {}, options = {}) {
     const resp = await this.get(url, params, options);
-    const data = await resp.json();
+    const data = await parseBaiduJson(resp);
     if (data.errno !== 0) {
       log.error("requests", "request return error, return =", JSON.stringify(data).slice(0, 500));
     }
@@ -206,7 +224,7 @@ class Requests {
   /** POST and parse JSON */
   async postReqJson(url, params = {}, data = null, options = {}) {
     const resp = await this.post(url, params, data, options);
-    const json = await resp.json();
+    const json = await parseBaiduJson(resp);
     if (json.errno !== 0) {
       log.error("requests", "request return error, return =", JSON.stringify(json).slice(0, 500));
     }
@@ -237,4 +255,4 @@ function buildMultipartFile(fileName, fileBuffer, fieldName) {
   };
 }
 
-module.exports = { Requests, buildMultipartFile, FIXED_HEADERS };
+module.exports = { Requests, buildMultipartFile, FIXED_HEADERS, parseBaiduJson };

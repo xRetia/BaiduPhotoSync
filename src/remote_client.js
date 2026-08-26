@@ -808,8 +808,8 @@ class YikeRemoteClient {
 
     const albumInfo = await this._refreshAlbumForAssociation(albumId);
 
-    // 构造 OnlineItem info 对象
-    const itemInfos = requested.map((fsid) => ({ fsid: parseInt(fsid, 10) }));
+    // 构造 OnlineItem info 对象（fsid 保持字符串，避免精度丢失）
+    const itemInfos = requested.map((fsid) => ({ fsid: String(fsid) }));
 
     const response = await this._appendWithProcessPacing(albumInfo, itemInfos);
     const errno = response && typeof response === "object" ? String(response.errno) : "unknown";
@@ -860,20 +860,36 @@ class YikeRemoteClient {
   }
 
   /**
-   * 多文件上传（兼容路径，逐个上传）。
+   * 多文件上传（两阶段模型：先上传所有文件，再批量关联）。
+   * 对齐 Python 版 _upload_media：并行上传 payload → 统一 addfile → 回读确认。
    */
   async uploadFiles(albumId, filePaths, progress = null) {
     const paths = [...filePaths];
+    const total = Math.max(1, paths.length);
+
+    // 阶段 1：逐个上传文件（仅上传，不调用 addfile）
+    const fsids = [];
     for (let i = 0; i < paths.length; i++) {
       const p = paths[i];
       if (progress) {
-        progress(Math.floor((i / Math.max(1, paths.length)) * 100), `正在上传并确认入册 ${path.basename(p)}`);
+        progress(Math.floor((i / total) * 85), `正在上传 ${path.basename(p)}（${i + 1}/${total}）`);
       }
-      await this.uploadFileOnce(albumId, p, null);
-      if (progress) {
-        progress(Math.floor(((i + 1) / Math.max(1, paths.length)) * 100), `已上传并确认入册 ${path.basename(p)}`);
-      }
+      const fsid = await this.uploadFilePayloadOnce(p, null);
+      fsids.push(fsid);
     }
+
+    // 阶段 2：批量关联到相册（一次 addfile，全局节流）
+    if (progress) progress(90, `正在将 ${fsids.length} 个文件统一加入相册`);
+    const confirmed = await this.associateUploadedFsidsOnce(albumId, fsids);
+
+    // 检查是否全部确认
+    const missing = fsids.filter((f) => !confirmed.has(f));
+    if (missing.length > 0) {
+      throw new RemoteClientError(
+        `以下文件未被服务端确认加入相册（共 ${missing.length} 个）`
+      );
+    }
+    if (progress) progress(100, `已上传并确认入册 ${fsids.length} 个文件`);
   }
 
   /**

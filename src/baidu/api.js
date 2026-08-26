@@ -9,7 +9,7 @@ const fs = require("fs");
 const log = require("../logger");
 const path = require("path");
 const crypto = require("crypto");
-const { Requests, buildMultipartFile } = require("./requests");
+const { Requests, buildMultipartFile, parseBaiduJson } = require("./requests");
 const { getMediaInfo_interface, get_sign_by_sign1sign2sign3 } = require("./crypto");
 
 const BASE = "https://photo.baidu.com";
@@ -76,7 +76,7 @@ class General {
       params,
       formData
     );
-    return resp.json();
+    return parseBaiduJson(resp);
   }
 
   /** 上传步骤3: create (确认上传) */
