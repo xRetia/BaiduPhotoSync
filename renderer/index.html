@@ -110,6 +110,9 @@
                 <button id="btnMediaDownload" class="icon-btn-sm" disabled title="下载">
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 4v8M4 8l4 4 4-4M3 13h10"/></svg>
                 </button>
+                <button id="btnMediaDragOut" class="icon-btn-sm" disabled title="准备拖出">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 8h8M8 4l4 4-4 4M3 13h10"/></svg>
+                </button>
                 <button id="btnMediaPreview" class="icon-btn-sm" disabled title="预览">
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
                 </button>
@@ -122,7 +125,7 @@
                 </select>
               </div>
             </div>
-            <div class="media-view-area">
+            <div class="media-view-area" data-drag-hint="松开以上传到当前相册">
               <div id="mediaDetailView" class="media-view active">
                 <table class="data-table">
                   <thead>
@@ -142,6 +145,11 @@
               </div>
             </div>
             <div id="mediaSelectedName" class="selection-bar" style="display:none"></div>
+            <div id="dragOutBar" class="drag-out-bar" style="display:none">
+              <span class="drag-out-label">已准备 <b id="dragOutCount">0</b> 个文件，拖到此处可保存到本地文件夹</span>
+              <div id="dragOutItems" class="drag-out-items"></div>
+              <button id="btnDragOutCancel" class="btn-sm">清除</button>
+            </div>
           </section>
         </div>
       </section>

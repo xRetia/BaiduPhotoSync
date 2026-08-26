@@ -901,6 +901,37 @@ class YikeRemoteClient {
   }
 
   /**
+   * 下载媒体到指定目录（供拖拽下载使用，文件名冲突时自动追加序号）。
+   * @returns {Promise<string>} 下载后的文件路径
+   */
+  async downloadMediaTo(albumId, fsid, targetDirectory) {
+    let itemInfo;
+    try {
+      itemInfo = this._mediaObject(albumId, fsid);
+    } catch {
+      await this.listMedia(albumId, true);
+      itemInfo = this._mediaObject(albumId, fsid);
+    }
+    const baseName = (itemInfo.path || "").split("/").pop() || `${fsid}`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    let fileName = baseName;
+    const ext = path.extname(baseName);
+    const stem = baseName.slice(0, baseName.length - ext.length);
+    let counter = 1;
+    while (fs.existsSync(path.join(targetDirectory, fileName))) {
+      fileName = `${stem} (${counter})${ext}`;
+      counter++;
+    }
+    log.debug("media", `拖拽下载：album_id=${albumId}，fsid=${fsid}，目标=${targetDirectory}，文件名=${fileName}`);
+    try {
+      await this._api.downloadFile(itemInfo, targetDirectory, fileName, true);
+    } catch (err) {
+      throw new RemoteClientError(`下载失败：${fileName}`);
+    }
+    return path.join(targetDirectory, fileName);
+  }
+
+  /**
    * 删除云端媒体。
    */
   async deleteMedia(albumId, fsid) {

@@ -303,7 +303,7 @@ function setConnected(connected) {
 
   const enableIfConnected = [
     "btnRefresh","btnAlbumRefresh","btnAlbumCreate","btnAlbumRename","btnAlbumDelete",
-    "btnMediaUpload","btnMediaDownload","btnMediaPreview","btnMediaDelete",
+    "btnMediaUpload","btnMediaDownload","btnMediaDragOut","btnMediaPreview","btnMediaDelete",
     "btnBuildPlan","btnClearIgnored",
   ];
   enableIfConnected.forEach(id => { const e = $(id); if (e) e.disabled = !connected; });
@@ -938,6 +938,109 @@ $("btnMediaDownload").addEventListener("click", async () => {
   setTimeout(() => setProgress(0, "就绪"), 2000);
 });
 
+// === 拖拽上传（将本地文件拖入媒体区域） ===
+function isMediaFile(name) {
+  const ext = (name || "").toLowerCase().match(/\.([^.]+)$/)?.[1] || "";
+  return PHOTO_EXTS.includes("." + ext) || VIDEO_EXTS.includes("." + ext);
+}
+
+function extractDroppedPaths(dataTransfer) {
+  const paths = [];
+  if (!dataTransfer || !dataTransfer.files) return paths;
+  for (const file of dataTransfer.files) {
+    try {
+      const p = window.api.getPathForFile(file);
+      if (p) paths.push(p);
+    } catch { /* 非本地文件忽略 */ }
+  }
+  return paths;
+}
+
+function initDragUpload() {
+  const mediaArea = $("media-view-area");
+  if (!mediaArea) return;
+  let dragDepth = 0;
+  mediaArea.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; mediaArea.classList.add("drag-over"); });
+  mediaArea.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; mediaArea.classList.add("drag-over"); });
+  mediaArea.addEventListener("dragleave", () => { dragDepth--; if (dragDepth <= 0) { dragDepth = 0; mediaArea.classList.remove("drag-over"); } });
+  mediaArea.addEventListener("drop", (e) => {
+    e.preventDefault(); dragDepth = 0; mediaArea.classList.remove("drag-over");
+    const paths = extractDroppedPaths(e.dataTransfer);
+    if (paths.length === 0) { toast("未检测到可上传的文件，请拖入本地图片或视频。", "warning"); return; }
+    handleDroppedUpload(paths);
+  });
+}
+
+async function handleDroppedUpload(paths) {
+  if (!state.connected) { toast("请先登录后再上传。", "warning"); return; }
+  if (!state.currentAlbum) { toast("请先选择一个目标相册，再拖入文件上传。", "info"); return; }
+  const mediaPaths = [];
+  for (const p of paths) {
+    const name = p.split(/[\\/]/).pop() || p;
+    if (!isMediaFile(name)) { toast(`已忽略非媒体文件：${name}`, "warning", 2500); continue; }
+    mediaPaths.push(p);
+  }
+  if (mediaPaths.length === 0) { toast("没有可上传的图片或视频文件。", "warning"); return; }
+  setProgress(0, "正在上传拖入的文件");
+  try {
+    await bridge("upload_media", { album_id: state.currentAlbum.album_id, paths: mediaPaths });
+    setProgress(100, "上传完成");
+    toast(`已上传 ${mediaPaths.length} 个文件`, "info");
+    selectAlbum(state.currentAlbum);
+  } catch (err) {
+    setProgress(0, "操作失败");
+    toast("拖拽上传失败: " + err.message, "error");
+  }
+}
+
+// === 预下载拖出（选中文件 → 后台下载 → 拖出区 dragstart → startDrag） ===
+let dragOutFiles = []; // [{name, path}]
+
+$("btnMediaDragOut").addEventListener("click", () => prepareDragOut());
+$("btnDragOutCancel").addEventListener("click", clearDragOut);
+
+function clearDragOut() {
+  dragOutFiles = [];
+  $("dragOutBar").style.display = "none";
+  $("dragOutItems").innerHTML = "";
+}
+
+async function prepareDragOut() {
+  if (!state.currentAlbum) return;
+  const selected = getSelectedMedia();
+  if (selected.length === 0) { toast("请先选择要拖出的文件。", "info"); return; }
+  // 已有准备好的文件先清除
+  clearDragOut();
+  setProgress(0, "正在准备拖出文件…");
+  const items = selected.map(m => ({ album_id: m.album_id, fsid: m.fsid, name: m.name }));
+  try {
+    const result = await bridge("prepare_drag_download", { items });
+    dragOutFiles = result.files || [];
+    if (dragOutFiles.length === 0) { toast("没有可拖出的文件。", "warning"); setProgress(0, "就绪"); return; }
+    $("dragOutCount").textContent = dragOutFiles.length;
+    $("dragOutBar").style.display = "flex";
+    const container = $("dragOutItems");
+    container.innerHTML = "";
+    for (const f of dragOutFiles) {
+      const chip = el("div", "drag-chip", f.name);
+      chip.title = "拖到任意文件夹即可保存";
+      chip.draggable = true;
+      chip.addEventListener("dragstart", (e) => {
+        e.dataTransfer.effectAllowed = "copy";
+        // 同步调用 startDrag（preload 中用 sendSync，确保在 dragstart 内执行）
+        const ok = window.api.startDrag([f.path]);
+        if (!ok) { e.preventDefault(); toast("拖出失败，请重试。", "error"); }
+      });
+      container.appendChild(chip);
+    }
+    setProgress(100, `已准备 ${dragOutFiles.length} 个文件，可拖出`);
+    setTimeout(() => setProgress(0, "就绪"), 2000);
+  } catch (err) {
+    setProgress(0, "操作失败");
+    toast("准备拖出失败: " + err.message, "error");
+  }
+}
+
 $("btnMediaPreview").addEventListener("click", () => {
   const selected = getSelectedMedia();
   if (selected.length !== 1) { toast("请选择一张照片后再预览。", "info"); return; }
@@ -1346,6 +1449,7 @@ async function init() {
   splashShownAt = Date.now();
   showLoading("正在准备应用…");
   setLoadingStage(10, "正在准备应用…");
+  initDragUpload();
   try {
     const settings = await bridge("get_settings");
     state.settings = settings;

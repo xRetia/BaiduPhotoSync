@@ -1,6 +1,6 @@
 "use strict";
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("api", {
   // Bridge RPC call
@@ -74,4 +74,10 @@ contextBridge.exposeInMainWorld("api", {
   onSyncResultData: (callback) => {
     ipcRenderer.on("sync-result:data", (_e, data) => callback(data));
   },
+
+  // Drag & drop
+  // 拖入：获取 File 对象对应的本地真实路径
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  // 预下载拖出：下载到临时目录后，在渲染进程 dragstart 内同步调用
+  startDrag: (paths) => ipcRenderer.sendSync("drag:start-drag", paths),
 });
