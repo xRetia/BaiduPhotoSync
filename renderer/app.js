@@ -1176,12 +1176,19 @@ async function toggleIgnoreAlbum(albumName) {
     state.ignoredAlbumNames.add(albumName);
     setStatus(`已加入忽略列表：${albumName}`);
   }
+  await persistIgnoredAlbums();
   if (state.syncActions.length > 0) $("btnBuildPlan").click();
+}
+
+async function persistIgnoredAlbums() {
+  try { await bridge("save_settings", { ignored_album_names: Array.from(state.ignoredAlbumNames) }); }
+  catch (err) { console.error("保存忽略列表失败:", err); }
 }
 
 $("btnClearIgnored").addEventListener("click", async () => {
   if (state.ignoredAlbumNames.size === 0) { setStatus("忽略列表为空。"); return; }
   state.ignoredAlbumNames.clear();
+  await persistIgnoredAlbums();
   setStatus("已清空忽略列表。");
   if (state.syncActions.length > 0) $("btnBuildPlan").click();
 });
@@ -1422,6 +1429,9 @@ async function init() {
   try {
     const settings = await bridge("get_settings");
     state.settings = settings;
+    if (Array.isArray(settings.ignored_album_names)) {
+      state.ignoredAlbumNames = new Set(settings.ignored_album_names.filter(n => n && n.trim()));
+    }
     if (settings.local_root) $("localRoot").value = settings.local_root;
     if (settings.media_browser_view_mode) $("mediaViewMode").value = settings.media_browser_view_mode;
     // Apply view mode from saved setting
