@@ -951,13 +951,13 @@ function extractDroppedPaths(dataTransfer) {
     try {
       const p = window.api.getPathForFile(file);
       if (p) paths.push(p);
-    } catch { /* 非本地文件忽略 */ }
+    } catch (err) { /* getPathForFile 失败时忽略该文件 */ }
   }
   return paths;
 }
 
 function initDragUpload() {
-  const mediaArea = $("media-view-area");
+  const mediaArea = document.querySelector(".media-view-area");
   if (!mediaArea) return;
   let dragDepth = 0;
   mediaArea.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; mediaArea.classList.add("drag-over"); });
@@ -1026,10 +1026,8 @@ async function prepareDragOut() {
       chip.title = "拖到任意文件夹即可保存";
       chip.draggable = true;
       chip.addEventListener("dragstart", (e) => {
-        e.dataTransfer.effectAllowed = "copy";
-        // 同步调用 startDrag（preload 中用 sendSync，确保在 dragstart 内执行）
-        const ok = window.api.startDrag([f.path]);
-        if (!ok) { e.preventDefault(); toast("拖出失败，请重试。", "error"); }
+        e.preventDefault();
+        window.api.startDrag([f.path]);
       });
       container.appendChild(chip);
     }

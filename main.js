@@ -1651,15 +1651,15 @@ function dragDownloadDirectory() {
 async function downloadForDrag(albumId, fsid) {
   if (!client) throw new Error("未登录");
   const dir = dragDownloadDirectory();
-  return await client.downloadMediaTo(albumId, fsid, dir);
+  const result = await client.downloadMediaTo(albumId, fsid, dir);
+  return result;
 }
 
-// 渲染进程在 dragstart 内同步调用，启动系统文件拖拽
+// 渲染进程在 dragstart 内调用，启动系统文件拖拽（异步 send，对齐官方文档）
 ipcMain.on("drag:start-drag", (event, paths) => {
   const list = Array.isArray(paths) ? paths : [];
   if (list.length === 0) return;
   const icon = path.join(__dirname, "assets", "yike_sync_256.png");
-  event.returnValue = true; // sendSync 需要返回值
   try {
     event.sender.startDrag({
       files: list,
@@ -1673,7 +1673,6 @@ ipcMain.on("drag:start-drag", (event, paths) => {
     }, 5000);
   } catch (err) {
     log.warn("drag", "startDrag 失败:", err.message || err);
-    event.returnValue = false;
   }
 });
 
