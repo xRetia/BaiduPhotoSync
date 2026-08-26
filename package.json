@@ -1,10 +1,10 @@
 {
   "name": "baiduphotosync-electron",
-  "version": "1.0.8",
-  "description": "一刻相册同步助手 - Electron 版",
+  "version": "1.0.9",
+  "description": "一刻相册同步 - Electron Desktop App",
   "main": "main.js",
   "author": {
-    "name": "xRetia",
+    "name": "Baidu",
     "email": "xRetia@users.noreply.github.com"
   },
   "repository": {
@@ -25,9 +25,10 @@
     "electron@33.4.11": true
   },
   "build": {
-    "appId": "com.xretia.baiduphotosync",
-    "productName": "一刻相册同步助手",
-    "copyright": "Copyright © 2024 xRetia",
+    "appId": "com.baidu.baiduphotosync",
+    "productName": "一刻相册同步",
+    "executableName": "BaiduPhotoSync",
+    "copyright": "Copyright © 2026 Baidu",
     "files": [
       "main.js",
       "preload.js",
@@ -48,11 +49,19 @@
       }
     ],
     "win": {
+      "icon": "yike_sync.ico",
+      "publisherName": "Baidu",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
-      "artifactName": "baiduphotosync-electron-${version}-win-${arch}.${ext}"
+      "artifactName": "baiduphotosync-electron-${version}-setup-${arch}.${ext}"
+    },
+    "nsis": {
+      "shortcutName": "一刻相册同步",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "yike_sync.ico",
+      "uninstallerIcon": "yike_sync.ico"
     },
     "mac": {
       "target": [
