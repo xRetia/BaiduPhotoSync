@@ -78,6 +78,4 @@ contextBridge.exposeInMainWorld("api", {
   // Drag & drop
   // 拖入：获取 File 对象对应的本地真实路径
   getPathForFile: (file) => webUtils.getPathForFile(file),
-  // 预下载拖出：下载到临时目录后，在渲染进程 dragstart 内调用（异步 send，对齐官方文档）
-  startDrag: (paths) => ipcRenderer.send("drag:start-drag", paths),
 });

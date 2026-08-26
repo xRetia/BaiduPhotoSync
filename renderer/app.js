@@ -303,7 +303,7 @@ function setConnected(connected) {
 
   const enableIfConnected = [
     "btnRefresh","btnAlbumRefresh","btnAlbumCreate","btnAlbumRename","btnAlbumDelete",
-    "btnMediaUpload","btnMediaDownload","btnMediaDragOut","btnMediaPreview","btnMediaDelete",
+    "btnMediaUpload","btnMediaDownload","btnMediaPreview","btnMediaDelete",
     "btnBuildPlan","btnClearIgnored",
   ];
   enableIfConnected.forEach(id => { const e = $(id); if (e) e.disabled = !connected; });
@@ -789,8 +789,8 @@ async function loadVisibleThumbnails() {
           state.thumbnailLoadedFsids.add(item.fsid);
           const tile = grid.querySelector(`.thumb-tile[data-fsid="${item.fsid}"]`);
           if (tile) {
-            const ph = tile.querySelector(".thumb-placeholder");
-            if (ph) { const img = document.createElement("img"); img.className = "thumb-image"; img.src = "file://" + result.path.replace(/\\\\/g, "/"); ph.replaceWith(img); }
+             const ph = tile.querySelector(".thumb-placeholder");
+             if (ph) { const img = document.createElement("img"); img.className = "thumb-image"; img.draggable = false; img.src = "file://" + result.path.replace(/\\\\/g, "/"); ph.replaceWith(img); }
           }
         }
       } catch (err) { state.thumbnailFailedFsids.add(item.fsid); }
@@ -845,8 +845,8 @@ async function loadVisibleThumbnails() {
           state.thumbnailLoadedFsids.add(item.fsid);
           const tile = grid.querySelector(`.thumb-tile[data-fsid="${item.fsid}"]`);
           if (tile) {
-            const ph = tile.querySelector(".thumb-placeholder");
-            if (ph) { const img = document.createElement("img"); img.className = "thumb-image"; img.src = "file://" + result.path.replace(/\\/g, "/"); ph.replaceWith(img); }
+             const ph = tile.querySelector(".thumb-placeholder");
+             if (ph) { const img = document.createElement("img"); img.className = "thumb-image"; img.draggable = false; img.src = "file://" + result.path.replace(/\\/g, "/"); ph.replaceWith(img); }
           }
         }
       } catch (err) { state.thumbnailFailedFsids.add(item.fsid); }
@@ -993,51 +993,7 @@ async function handleDroppedUpload(paths) {
   }
 }
 
-// === 预下载拖出（选中文件 → 后台下载 → 拖出区 dragstart → startDrag） ===
-let dragOutFiles = []; // [{name, path}]
-
-$("btnMediaDragOut").addEventListener("click", () => prepareDragOut());
-$("btnDragOutCancel").addEventListener("click", clearDragOut);
-
-function clearDragOut() {
-  dragOutFiles = [];
-  $("dragOutBar").style.display = "none";
-  $("dragOutItems").innerHTML = "";
-}
-
-async function prepareDragOut() {
-  if (!state.currentAlbum) return;
-  const selected = getSelectedMedia();
-  if (selected.length === 0) { toast("请先选择要拖出的文件。", "info"); return; }
-  // 已有准备好的文件先清除
-  clearDragOut();
-  setProgress(0, "正在准备拖出文件…");
-  const items = selected.map(m => ({ album_id: m.album_id, fsid: m.fsid, name: m.name }));
-  try {
-    const result = await bridge("prepare_drag_download", { items });
-    dragOutFiles = result.files || [];
-    if (dragOutFiles.length === 0) { toast("没有可拖出的文件。", "warning"); setProgress(0, "就绪"); return; }
-    $("dragOutCount").textContent = dragOutFiles.length;
-    $("dragOutBar").style.display = "flex";
-    const container = $("dragOutItems");
-    container.innerHTML = "";
-    for (const f of dragOutFiles) {
-      const chip = el("div", "drag-chip", f.name);
-      chip.title = "拖到任意文件夹即可保存";
-      chip.draggable = true;
-      chip.addEventListener("dragstart", (e) => {
-        e.preventDefault();
-        window.api.startDrag([f.path]);
-      });
-      container.appendChild(chip);
-    }
-    setProgress(100, `已准备 ${dragOutFiles.length} 个文件，可拖出`);
-    setTimeout(() => setProgress(0, "就绪"), 2000);
-  } catch (err) {
-    setProgress(0, "操作失败");
-    toast("准备拖出失败: " + err.message, "error");
-  }
-}
+// === 预览（仅查看，不支持拖出） ===
 
 $("btnMediaPreview").addEventListener("click", () => {
   const selected = getSelectedMedia();

@@ -1240,26 +1240,6 @@ async function handleMethod(method, params, sender) {
     return { path: resultPath };
   }
 
-  if (method === "prepare_drag_download") {
-    if (!client) throw new Error("未登录");
-    const items = Array.isArray(params.items) ? params.items : [];
-    if (items.length === 0) throw new Error("未选择文件");
-    const paths = [];
-    let done = 0;
-    for (const item of items) {
-      if (sender && !sender.isDestroyed()) {
-        sender.send("bridge:progress", Math.round((done / items.length) * 100), `正在下载 ${done + 1}/${items.length}`);
-      }
-      const p = await downloadForDrag(item.album_id || "", item.fsid || "");
-      paths.push({ name: item.name, path: p });
-      done++;
-    }
-    if (sender && !sender.isDestroyed()) {
-      sender.send("bridge:progress", 100, `已准备 ${paths.length} 个文件`);
-    }
-    return { files: paths };
-  }
-
   if (method === "download_media_cached") {
     if (!client) throw new Error("未登录");
     const albumId = params.album_id || "";
@@ -1636,45 +1616,6 @@ ipcMain.handle("shell:openPath", (event, filePath) => {
 ipcMain.handle("clipboard:readText", async () => {
   const { clipboard } = require("electron");
   return clipboard.readText();
-});
-
-// ========== 拖拽下载 ==========
-
-// 拖出下载的临时目录
-function dragDownloadDirectory() {
-  return path.join(os.tmpdir(), "yike-sync-drag");
-}
-
-/**
- * 下载媒体到拖拽临时目录（文件名冲突时自动追加序号）。
- * @returns {Promise<string>} 下载后的文件路径
- */
-async function downloadForDrag(albumId, fsid) {
-  if (!client) throw new Error("未登录");
-  const dir = dragDownloadDirectory();
-  const result = await client.downloadMediaTo(albumId, fsid, dir);
-  return result;
-}
-
-// 渲染进程在 dragstart 内调用，启动系统文件拖拽（异步 send，对齐官方文档）
-ipcMain.on("drag:start-drag", (event, paths) => {
-  const list = Array.isArray(paths) ? paths : [];
-  if (list.length === 0) return;
-  const icon = path.join(__dirname, "assets", "yike_sync_256.png");
-  try {
-    event.sender.startDrag({
-      files: list,
-      icon,
-    });
-    // 延迟清理临时文件（拖拽会话结束后）
-    setTimeout(() => {
-      for (const p of list) {
-        try { fs.unlinkSync(p); } catch {}
-      }
-    }, 5000);
-  } catch (err) {
-    log.warn("drag", "startDrag 失败:", err.message || err);
-  }
 });
 
 // ========== App 生命周期 ==========
