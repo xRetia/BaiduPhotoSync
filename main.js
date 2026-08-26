@@ -47,6 +47,7 @@ let syncControl = null;
 let syncActions = [];
 let settings = {};
 let syncWorker = null;
+let ffmpegDownloadController = null; // 当前 FFmpeg 下载的取消控制器
 let syncTaskId = 0;
 
 // ========== 会话保活 ==========

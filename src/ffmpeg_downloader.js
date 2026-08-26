@@ -65,6 +65,8 @@ async function _readChecksum(source = SOURCES.OFFICIAL) {
   }
 }
 
+const CONNECTIONS = 16; // 并行下载连接数
+
 function _formatMib(value) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
@@ -73,19 +75,169 @@ function _formatSpeed(value) {
   return `${(value / 1024 / 1024).toFixed(1)} MB/秒`;
 }
 
+/**
+ * 单连接下载一个字节段，写入 fd 的指定偏移位置。
+ * 每连接独立停滞超时（30s 无数据则中止），响应外部取消信号。
+ */
+async function _downloadRange(url, destFd, start, end, externalSignal, onProgress) {
+  const controller = new AbortController();
+  let stallTimer = setTimeout(() => controller.abort(), 30000);
+
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) { clearTimeout(stallTimer); throw new FFmpegDownloadError("下载已取消。", true); }
+    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { Range: `bytes=${start}-${end}` },
+    });
+    if (!resp.ok && resp.status !== 206) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const reader = resp.body.getReader();
+    let offset = start;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      clearTimeout(stallTimer);
+      if (done) break;
+      stallTimer = setTimeout(() => controller.abort(), 30000);
+
+      // 同步写入文件指定位置
+      const buf = value instanceof Buffer ? value : Buffer.from(value);
+      fs.writeSync(destFd, buf, 0, buf.length, offset);
+      offset += buf.length;
+      onProgress(buf.length);
+    }
+
+    if (offset !== end + 1) {
+      throw new Error(`段不完整: ${start}-${end}, 实际 ${offset - start} 字节`);
+    }
+  } catch (err) {
+    clearTimeout(stallTimer);
+    if (externalSignal?.aborted || err.name === "AbortError") {
+      throw new FFmpegDownloadError("下载已取消。", true);
+    }
+    throw err;
+  } finally {
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+  }
+}
+
+/**
+ * 多连接并行下载：先用 HEAD 获取文件大小并探测 Range 支持，
+ * 支持则分 16 段并行下载，不支持则回退单连接。
+ */
 async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL, externalSignal = null) {
   const url = `${_baseUrl(source)}/${ARCHIVE_NAME}`;
   const sourceLabel = source === SOURCES.MIRROR ? "国内镜像" : "官方";
   const tempPath = targetPath + ".part";
 
-  // 停滞超时：连接阶段允许 90 秒等待响应；下载阶段只要持续有数据流入就不超时，
-  // 仅当连续 60 秒无任何数据时才中止，避免慢速但正常的大文件下载被误杀。
+  if (externalSignal?.aborted) throw new FFmpegDownloadError("下载已取消。", true);
+
+  // 探测文件大小和 Range 支持
+  let totalSize = 0;
+  let supportsRange = false;
+  try {
+    const headResp = await fetch(url, {
+      method: "HEAD",
+      signal: externalSignal ? externalSignal : undefined,
+      headers: { Range: "bytes=0-0" },
+    });
+    if (headResp.status === 206) {
+      supportsRange = true;
+      const cr = headResp.headers.get("content-range");
+      if (cr) {
+        const m = cr.match(/\/(\d+)/);
+        if (m) totalSize = parseInt(m[1], 10);
+      }
+    }
+    if (!totalSize) {
+      const cl = headResp.headers.get("content-length");
+      if (cl) totalSize = parseInt(cl, 10);
+    }
+  } catch (err) {
+    if (externalSignal?.aborted) throw new FFmpegDownloadError("下载已取消。", true);
+    throw new FFmpegDownloadError(`“极光引擎”（${sourceLabel}源）连接失败：${err.name}`);
+  }
+
+  if (externalSignal?.aborted) throw new FFmpegDownloadError("下载已取消。", true);
+
+  // 不支持 Range 或文件太小则单连接回退
+  if (!supportsRange || totalSize < CONNECTIONS * 256 * 1024) {
+    return _downloadArchiveSingle(tempPath, url, sourceLabel, progress, externalSignal);
+  }
+
+  // 多连接并行下载
+  const fd = fs.openSync(tempPath, "w");
+  try {
+    // 预分配文件大小
+    fs.ftruncateSync(fd, totalSize);
+
+    const segmentSize = Math.ceil(totalSize / CONNECTIONS);
+    const ranges = [];
+    for (let i = 0; i < CONNECTIONS; i++) {
+      const start = i * segmentSize;
+      const end = Math.min(start + segmentSize - 1, totalSize - 1);
+      if (start <= end) ranges.push({ start, end, index: i });
+    }
+
+    let downloaded = 0;
+    const started = performance.now();
+    let lastProgressTime = 0;
+
+    const updateProgress = (delta) => {
+      downloaded += delta;
+      const now = performance.now();
+      if (progress && now - lastProgressTime > 200) {
+        lastProgressTime = now;
+        const elapsed = Math.max(50, (now - started) / 1000);
+        const speed = downloaded / elapsed;
+        const percentage = 5 + Math.floor((downloaded / totalSize) * 80);
+        const text = `正在下载极光视频压制引擎（${sourceLabel}）：${_formatMib(downloaded)} / ${_formatMib(totalSize)} · ${_formatSpeed(speed)}`;
+        progress(Math.max(0, Math.min(100, percentage)), text);
+      }
+    };
+
+    // 每个连接返回该段的 SHA-256，最终合并
+    const tasks = ranges.map((r) =>
+      _downloadRange(url, fd, r.start, r.end, externalSignal, updateProgress)
+    );
+    await Promise.all(tasks);
+
+    if (progress) progress(85, `下载完成，正在校验完整性…`);
+
+    // 读取整个文件计算 SHA-256
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(tempPath);
+    for await (const chunk of stream) {
+      hash.update(chunk);
+    }
+    const sha = hash.digest("hex").toLowerCase();
+    fs.closeSync(fd);
+    fs.renameSync(tempPath, targetPath);
+    return sha;
+  } catch (err) {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(tempPath); } catch {}
+    if (err instanceof FFmpegDownloadError) throw err;
+    if (externalSignal?.aborted || err.name === "AbortError") {
+      throw new FFmpegDownloadError("下载已取消。", true);
+    }
+    throw new FFmpegDownloadError(`“极光引擎”（${sourceLabel}源）下载失败：${err.name}`);
+  }
+}
+
+/** 单连接下载回退路径 */
+async function _downloadArchiveSingle(tempPath, url, sourceLabel, progress, externalSignal = null) {
   const CONNECT_TIMEOUT = 90000;
   const STALL_TIMEOUT = 60000;
   const controller = new AbortController();
   let stallTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT);
 
-  // 联动外部取消信号
   const onExternalAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) { clearTimeout(stallTimer); throw new FFmpegDownloadError("下载已取消。", true); }
@@ -102,13 +254,11 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL,
     let downloaded = 0;
     const started = performance.now();
 
-    // 收到首个响应后切换为停滞超时
     clearTimeout(stallTimer);
     stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT);
 
     while (true) {
       const { done, value } = await reader.read();
-      // 每收到一帧数据就重置停滞计时器
       clearTimeout(stallTimer);
       if (done) break;
       stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT);
@@ -128,11 +278,10 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL,
     }
     writer.end();
     await new Promise((resolve) => writer.on("finish", resolve));
-    fs.renameSync(tempPath, targetPath);
+    fs.renameSync(tempPath, tempPath.replace(/\.part$/, ""));
     return hash.digest("hex").toLowerCase();
   } catch (err) {
     clearTimeout(stallTimer);
-    // 先关闭写入流释放文件句柄，再删除临时文件
     if (writer) {
       try { writer.destroy(); } catch {}
       await new Promise((r) => writer.on("close", r)).catch(() => {});
@@ -141,7 +290,7 @@ async function _downloadArchive(targetPath, progress, source = SOURCES.OFFICIAL,
     if (externalSignal?.aborted || err.name === "AbortError") {
       throw new FFmpegDownloadError("下载已取消。", true);
     }
-    throw new FFmpegDownloadError(`"极光引擎"（${sourceLabel}源）下载失败：${err.name}`);
+    throw new FFmpegDownloadError(`“极光引擎”（${sourceLabel}源）下载失败：${err.name}`);
   } finally {
     if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
